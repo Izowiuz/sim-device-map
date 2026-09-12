@@ -216,6 +216,25 @@ would bind the wrong things with total confidence. `capture.py` says what
 changed and offers to throw the grouping away and start over. Silently
 re-linking would be worse than not matching at all.
 
+## Who reads it
+
+The bind wizards, which expect this repo as a **sibling directory** -- or
+`SIM_DEVICE_MAP` pointing at it:
+
+```
+~/Git/
+  sim-device-map/          <- devicemap.py + captures/
+  dcs-bind-wizard/         ./dcs-bind-wizard.py, then P in the bind table
+  warthunder-bind-wizard/  ./plan.py
+```
+
+They read exactly two things: `devicemap.py` and `captures/*/*.toml`. Devices
+are matched by USB id and serial, so which of `js0`/`js1` a device landed on,
+and the order you plugged them in, do not matter.
+
+Change the hardware, and the flow is: capture here, then re-run the wizard in
+each game. Nothing in either game's repo describes your devices any more.
+
 ## Usage
 
 ```bash

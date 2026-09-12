@@ -1,0 +1,356 @@
+# L-VPC VMAX Prime Throttle — left hand, the power quadrant.
+#
+# Axis facts are measured. The HID descriptor is worth more than evdev here: it
+# distinguishes a Slider from a Dial, which evdev flattens into ABS_THROTTLE
+# and ABS_RUDDER.
+#
+# Button grouping is captured by hand with capture.py, because it cannot be
+# obtained any other way: the firmware reports no HID hat switches at all. An
+# earlier attempt to reconstruct it from the DCS captures was cleared after two
+# of its guesses turned out wrong.
+
+
+[device]
+slug    = "virpil-vmax-prime-throttle"
+product = "L-VPC VMAX Prime Throttle"
+vendor  = "VIRPIL"
+kind    = "throttle"
+hand    = "left"
+buttons = 51
+axes    = 7
+
+[[identity]]
+usb        = "3344:8196"
+serial     = "09102A00"
+# Contains the firmware build date -- do not match on it.
+evdev      = "VIRPIL Controls 20260723 L-VPC VMAX Prime Throttle"
+first_seen = "2026-09-12"
+
+[identity.games]
+dcs        = "L-VPC VMAX Prime Throttle {4D243B15-AA30-11f1-8004-000044455354}"
+warthunder = "3344:8196"
+
+# Survives an identity change, so the same hardware is still
+# recognisable after a reconfiguration -- and a change HERE means
+# the buttons may have moved, which makes the grouping suspect.
+[fingerprint]
+buttons = 51
+axes    = 7
+axmap   = [0, 1, 3, 4, 5, 6, 7]
+hid     = ["Rx", "Ry", "Rz", "Slider", "Dial", "Y", "X"]
+
+# --------------------------------------------------------------------- axes
+
+[[axis]]
+index  = 0
+evdev  = "ABS_X"
+hid    = "X"
+rest   = "centred"
+kind   = "mini-stick-x"
+label  = "Thumb mini-stick, horizontal"
+suits  = ["view", "cue"]
+source = "measured"
+
+[[axis]]
+index  = 1
+evdev  = "ABS_Y"
+hid    = "Y"
+rest   = "centred"
+travel = "analog"
+kind   = "mini-stick-y"
+label  = "Thumb mini-stick, vertical"
+suits  = ["view", "cue"]
+source = "measured"
+
+[[axis]]
+index  = 2
+evdev  = "ABS_RX"
+hid    = "Rx"
+rest   = "mid"
+travel = "analog"
+kind   = "lever"
+label  = "Left throttle lever"
+suits  = ["throttle", "collective"]
+source = "measured"
+
+[[axis]]
+index  = 3
+evdev  = "ABS_RY"
+hid    = "Ry"
+rest   = "mid"
+travel = "analog"
+kind   = "lever"
+label  = "Right throttle lever"
+suits  = ["throttle", "zoom", "prop-pitch", "sweep"]
+source = "measured"
+
+[[axis]]
+index  = 4
+evdev  = "ABS_RZ"
+hid    = "Rz"
+rest   = "min"
+travel = "analog"
+kind   = "lever"
+label  = "Side lever"
+suits  = ["collective", "cue", "zoom", "sweep", "radiator"]
+source = "measured"
+
+[[axis]]
+index  = 5
+evdev  = "ABS_THROTTLE"
+hid    = "Slider"
+rest   = "min"
+kind   = "slider"
+label  = "Slider"
+suits  = ["zoom", "brake", "prop-pitch"]
+note   = "Resting at minimum makes it safe for an axis where zero means off."
+source = "measured"
+
+[[axis]]
+index  = 6
+evdev  = "ABS_RUDDER"
+hid    = "Dial"
+rest   = "centred"
+kind   = "dial"
+label  = "Rotary dial"
+suits  = ["trim", "zoom", "prop-pitch", "radiator"]
+note   = """HID calls it a Dial, so it is a rotary rather than a lever -- the best home for a trim axis. Unconfirmed whether it is an absolute pot or an endless encoder; an endless one would not suit an absolute axis."""
+source = "measured"
+
+# ------------------------------------------------------------------ buttons
+
+[[group]]
+kind   = "dial"
+buttons= []
+push   = 1
+axes   = [5]
+label  = "Left side dial"
+reach  = "needs letting go"
+suits  = ["trim", "occasional"]
+source = "measured"
+
+[[group]]
+kind   = "button"
+buttons= [0]
+label  = "Pinky button"
+reach  = "pinky finger, without releasing grip"
+suits  = ["reflex", "occasional"]
+source = "measured"
+
+[[group]]
+kind   = "dial"
+buttons= []
+push   = 8
+axes   = [6]
+label  = "Right side dial"
+reach  = "needs letting go"
+suits  = ["trim", "occasional"]
+source = "measured"
+
+[[group]]
+kind   = "ministick"
+buttons= []
+push   = 14
+axes   = [0, 1]
+label  = "Thumb mini-stick"
+reach  = "thumb, without releasing grip"
+suits  = ["view"]
+source = "measured"
+
+[[group]]
+kind   = "button"
+buttons= [2]
+label  = "Middle finger button"
+reach  = "middle/ring finger, without releasing grip"
+suits  = ["reflex", "occasional"]
+source = "measured"
+
+[[group]]
+kind   = "hat4"
+buttons= [4, 5, 6, 7]
+dirs   = ["up", "right", "down", "left"]
+push   = 3
+label  = "Middle finger hat"
+reach  = "middle/ring finger, without releasing grip"
+suits  = ["reflex", "sensor", "view", "trim"]
+source = "measured"
+
+[[group]]
+kind   = "hat2"
+buttons= [10, 12]
+dirs   = ["forward", "back"]
+push   = 9
+label  = "Thumb two-way hat"
+reach  = "thumb, without releasing grip"
+suits  = ["reflex", "stepped-pair"]
+source = "measured"
+
+[[group]]
+kind   = "unwired"
+buttons= [11, 13]
+label  = "Reported by the firmware, nothing attached"
+source = "measured"
+
+[[group]]
+kind   = "button"
+buttons= [15]
+label  = "Thumb button"
+reach  = "thumb, without releasing grip"
+suits  = ["reflex", "occasional"]
+source = "measured"
+
+[[group]]
+kind   = "button"
+buttons= [16]
+label  = "Bottom thumb button"
+reach  = "thumb, without releasing grip"
+suits  = ["reflex", "occasional"]
+source = "measured"
+
+[[group]]
+kind   = "hat4"
+buttons= [18, 19, 20, 21]
+dirs   = ["up", "right", "down", "left"]
+push   = 17
+label  = "Thumb hat"
+reach  = "thumb, without releasing grip"
+suits  = ["reflex", "sensor", "view", "trim"]
+source = "measured"
+
+[[group]]
+kind   = "button"
+buttons= [22]
+label  = "Keyboard B1 button"
+reach  = "needs letting go"
+suits  = ["occasional"]
+source = "measured"
+
+[[group]]
+kind   = "button"
+buttons= [23]
+label  = "Keyboard B2 button"
+reach  = "needs letting go"
+suits  = ["occasional"]
+source = "measured"
+
+[[group]]
+kind   = "button"
+buttons= [24]
+label  = "Keyboard B3 button"
+reach  = "needs letting go"
+suits  = ["occasional"]
+source = "measured"
+
+[[group]]
+kind   = "button"
+buttons= [25]
+label  = "Keyboard B4 button"
+reach  = "needs letting go"
+suits  = ["occasional"]
+source = "measured"
+
+[[group]]
+kind   = "button"
+buttons= [26]
+label  = "Keyboard B5 button"
+reach  = "needs letting go"
+suits  = ["occasional"]
+source = "measured"
+
+[[group]]
+kind   = "button"
+buttons= [27]
+label  = "Keyboard B6 button"
+reach  = "needs letting go"
+suits  = ["occasional"]
+source = "measured"
+
+[[group]]
+kind   = "button"
+buttons= [28]
+label  = "Big red button"
+reach  = "needs letting go"
+suits  = ["occasional"]
+source = "measured"
+
+[[group]]
+kind   = "hat2"
+buttons= [29, 30]
+dirs   = ["up", "down"]
+label  = "T1 rocker"
+reach  = "needs letting go"
+suits  = ["stepped-pair"]
+source = "measured"
+
+[[group]]
+kind   = "hat2"
+buttons= [31, 32]
+dirs   = ["up", "down"]
+label  = "T2 rocker"
+reach  = "needs letting go"
+suits  = ["stepped-pair"]
+source = "measured"
+
+[[group]]
+kind   = "hat2"
+buttons= [33, 34]
+dirs   = ["up", "down"]
+label  = "T3 rocker"
+reach  = "needs letting go"
+suits  = ["stepped-pair"]
+source = "measured"
+
+[[group]]
+kind   = "hat2"
+buttons= [35, 36]
+dirs   = ["up", "down"]
+label  = "T4 rocker"
+reach  = "needs letting go"
+suits  = ["stepped-pair"]
+source = "measured"
+
+[[group]]
+kind   = "hat2"
+buttons= [37, 38]
+dirs   = ["up", "down"]
+label  = "T5 rocker"
+reach  = "needs letting go"
+suits  = ["stepped-pair"]
+source = "measured"
+
+[[group]]
+kind   = "button"
+buttons= [39]
+label  = "APU button"
+reach  = "needs letting go"
+suits  = ["occasional"]
+source = "measured"
+
+[[group]]
+kind   = "encoder"
+buttons= [41, 42]
+dirs   = ["ccw", "cw"]
+push   = 40
+label  = "E1 encoder"
+reach  = "needs letting go"
+suits  = ["trim", "occasional"]
+source = "measured"
+
+[[group]]
+kind   = "encoder"
+buttons= [45, 44]
+dirs   = ["ccw", "cw"]
+push   = 43
+label  = "E2 encoder"
+reach  = "needs letting go"
+suits  = ["trim", "occasional"]
+source = "measured"
+
+[[group]]
+kind   = "selector"
+buttons= [50, 49, 48, 47, 46]
+positions= ["1", "2", "3", "4", "5"]
+label  = "Mode selector"
+reach  = "needs letting go"
+suits  = ["state"]
+source = "measured"

@@ -72,6 +72,8 @@ kind   = "lever"
 label  = "Left throttle lever"
 suits  = ["throttle", "collective"]
 source = "measured"
+moves_with = [3]
+coupling = "switchable"
 
 [[axis]]
 index  = 3
@@ -83,6 +85,9 @@ kind   = "lever"
 label  = "Right throttle lever"
 suits  = ["throttle", "zoom", "prop-pitch", "sweep"]
 source = "measured"
+moves_with = [2]
+coupling = "switchable"
+note   = """MEASURED 2026-09-17 with probe.py: 52 consecutive pairs, identical values, 0.00s apart every time -- so while the catch is engaged the right lever is spare only in the file. THIS IS A MODE, not a property: the levers uncouple. Splitting them is what makes the per-engine Thrust Left / Thrust Right split in DCS actually do something; joined, both engines get the same number. War Thunder pitch trim went here once and trimmed on every power change."""
 
 [[axis]]
 index  = 4

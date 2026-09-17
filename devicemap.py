@@ -56,8 +56,27 @@ class Axis:
     kind: str = ''
     label: str = ''
     suits: list = field(default_factory=list)
+    #: other axis indices that move when this one does, AS THE HARDWARE IS SET
+    #: UP NOW. An axis is not free just because nothing is bound to it: War
+    #: Thunder's pitch trim went on the VMAX's right throttle lever because the
+    #: file said nothing was there, and it trimmed the aircraft on every power
+    #: change because the two levers were clamped together.
+    moves_with: list = field(default_factory=list)
+    #: why they move together, which decides whether it can be undone:
+    #:   'switchable' -- a catch on the device, so this is a MODE not a fact
+    #:   'fixed'      -- one piece of plastic, two axes
+    #:   ''           -- nothing moves with it
+    coupling: str = ''
     note: str = ''
     source: str = 'unknown'
+
+    @property
+    def independent(self):
+        """False when something else travels with it, so binding this axis
+        also drives whatever is on its twin. Check `coupling` before working
+        around it: 'switchable' means the answer is a catch on the device, not
+        a different layout."""
+        return not self.moves_with
 
     @property
     def centring(self):
@@ -80,7 +99,9 @@ class Axis:
 @dataclass
 class Group:
     kind: str               # hat4 hat8 trigger switch2 switch3 button paddle
-    buttons: list           # ordered: hats by dirs, triggers by stages
+    #: ordered: hats by dirs, triggers by stages. A group need not have any --
+    #: a lever is an axis plus, sometimes, a contact.
+    buttons: list = field(default_factory=list)
     label: str = ''
     dirs: list = field(default_factory=list)
     stages: list = field(default_factory=list)
@@ -89,6 +110,7 @@ class Group:
     cumulative: bool = False  # a deeper stage keeps the shallower ones held
     rest_contact: int = None  # closed while the control is UNTOUCHED
     transient: list = field(default_factory=list)  # pulses DURING the travel
+    travel_contact: int = None  # closed for almost ALL of a lever's travel
     axes: list = field(default_factory=list)  # axes belonging to this control
     reach: str = ''
     rest: str = ''
@@ -104,6 +126,8 @@ class Group:
             out.append(self.push)
         if self.rest_contact is not None:
             out.append(self.rest_contact)
+        if self.travel_contact is not None:
+            out.append(self.travel_contact)
         out.extend(self.transient)
         return out
 
@@ -115,8 +139,12 @@ class Group:
         bound to it runs all the time except while you are using the control.
         A transient contact closes partway through the travel and so fires
         again on the way back out -- a weapon bound there goes off twice per
-        squeeze. Both are left out here and listed in `all_buttons`, so
-        coverage still adds up and a consumer that wants one must ask for it.
+        squeeze. A travel contact trips near the START of a lever's travel and
+        stays closed until it is nearly released, so whatever sits on it is
+        held down for as long as you are using the lever: countermeasures
+        bound there empty the aircraft while you brake. All three are left out
+        here and listed in `all_buttons`, so coverage still adds up and a
+        consumer that wants one must ask for it.
         """
         if self.kind in ('unknown', 'switch-position', 'unwired'):
             return []
@@ -137,6 +165,8 @@ class Group:
             return 'push'
         if self.rest_contact is not None and button == self.rest_contact:
             return 'rest contact (inverted)'
+        if self.travel_contact is not None and button == self.travel_contact:
+            return 'travel contact (held while the lever is used)'
         if button in self.transient:
             return 'transient (fires both ways)'
         names = self.dirs or self.stages or self.positions

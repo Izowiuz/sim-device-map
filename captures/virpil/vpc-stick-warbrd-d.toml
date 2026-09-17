@@ -206,9 +206,21 @@ suits  = ["occasional"]
 source = "measured"
 
 [[group]]
-kind   = "paddle"
-buttons= [31]
-label  = "Paddle button"
+# MEASURED 2026-09-17 with together.py: button 31 and axis 5 are ONE piece of
+# plastic. Two squeeze cycles, the same shape both times -- the switch closes
+# at about -26000 of the axis, a hair off the rest position, and stays closed
+# until roughly -16000 on the way back. So it is held for nearly the whole
+# squeeze, not tripped at the end of travel.
+#
+# It was recorded as a separate "Paddle button" before, and that name came from
+# a DCS command called "... (Paddle) Switch" being read as a description of the
+# hardware. The circle closed when that very command got bound back to it. What
+# the label cost: War Thunder had ID_FLARES here, so braking emptied the
+# countermeasures; BMS held SimAPOverride; the Hornet held AP/NWS disengage.
+kind   = "lever"
+axes   = [5]
+travel_contact = 31
+label  = "Analogue brake lever on the grip"
 reach  = "pinky finger, without releasing grip"
-suits  = ["reflex"]
+suits  = ["brake"]
 source = "measured"

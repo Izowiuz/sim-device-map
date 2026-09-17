@@ -8,7 +8,7 @@ pedals, a button box, a panel. The games disagree about what to call these
 devices and none of them knows what the controls *are*; this does.
 s
 
-## Why this exists
+## Scope
 
 A bind wizard needs three things. Two of them are per-game and already solved;
 the third is the same for every game and lived nowhere until this repo:
@@ -200,7 +200,7 @@ Never match on the evdev name: VIRPIL bakes the firmware build date into it
 — which is also why the DCS GUIDs in `identity.games` have been renumbered
 before.
 
-### The two layers disagreeing is the point
+### When the two layers disagree
 
 | identity | fingerprint | status | what it means |
 |---|---|---|---|
@@ -240,8 +240,17 @@ each game. Nothing in either game's repo describes your devices any more.
 ```bash
 ./capture.py              # work through the unknown controls
 ./capture.py --list       # what's known about each connected device
+
+./probe.py                # print events live; Ctrl-C summarises
+./probe.py --js /dev/input/js1 --seconds 25
+
 python3 -c 'import devicemap; print(devicemap.find_connected())'
 ```
+
+`capture.py` asks what a control is. `probe.py` shows what a control *does* —
+every event labelled from the map, and on exit what fired together: a button
+closing while an axis travels, or two axes reporting the same value. Touch one
+control at a time.
 
 ```python
 import devicemap
@@ -249,12 +258,24 @@ dev = devicemap.by_usb('3344:43e8')
 dev.groups('hat4')              # every 4-way hat, in press order
 dev.axes(suits='view')          # axes that suit head-look
 dev.unknown()                   # what still needs capturing
+
+g = dev.axis_group(5)           # the control an axis belongs to
+g.bindable_buttons              # excludes rest, travel and transient contacts
+dev.axis(2).independent         # False when another axis moves with it
 ```
 
-## A note for whoever reads this next
+## Extending a device file
 
-These files are the accumulated answer to "what is this knob". They are
-expensive to rebuild and cheap to extend. When you learn something concrete
-about a control — from a capture, from a game's own config, from the owner
-telling you — write it back into the device file with the right `source`,
-rather than keeping it in one conversation.
+Device files are expensive to rebuild and cheap to extend. Anything learned
+about a control — from a capture, from a game's own config, from the owner —
+belongs in the file with the right `source`, not in a note elsewhere.
+
+Two questions the file answers only if someone measures them, both via
+`probe.py`:
+
+- whether a button and an axis are **one control** (`travel_contact`,
+  `rest_contact`, `transient`)
+- whether two axes **move together** (`moves_with`, `coupling`)
+
+Neither is derivable from the OS, and *nothing is bound to it* is not the same
+question as *nothing else moves with it*.

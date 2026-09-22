@@ -1,0 +1,331 @@
+# What the wizard asks, and in what order.
+#
+# The order and the branching used to live in one 215-line function of nested
+# `if kind ==`, with a second, parallel copy of the same menus for editing.
+# Here each question is an entry, and the engine in `questions.py` walks them.
+#
+# `only` names a predicate in that module's `ONLY` table. It is a name, never
+# an expression in a string: a rule written as text in a data file is a rule
+# nothing can check until it runs.
+#
+# `of` is what a question is asked ABOUT, and it decides the shape of the
+# screen rather than just its contents:
+#
+#   control   one control at a time, each answer a box you can step back into.
+#             This is how you learn what a thing IS: by pressing it.
+#   device    a round over the whole device -- "press everything you can
+#             reach from here". Reach is not a fact about one control, so
+#             asking control by control would be asking the same question
+#             thirty-nine times.
+#   all       one list down every control at once. These are comparative
+#             judgements: "more distinct than that one", "harder to hold than
+#             that one". Spread over thirty-nine screens they come out
+#             inconsistent; side by side they calibrate each other.
+#
+# `how` is the widget: pick one, tick several, type a name, press a button,
+# watch a gesture, put directions in order, or walk a round.
+
+
+# --------------------------------------------------------------- one control
+
+[[ask]]
+id     = "buttons"
+called = "button IDs"
+of     = "control"
+how    = "collect"
+says = "Press every part of ONE control, then RETURN."
+sets = "buttons"
+note = """One control at a time, and all of it: a hat is one control, so
+press all four directions and the click as well.
+
+A switch or a lever that stays put: leave it in the position you mean,
+and press RETURN with it still there."""
+
+[[ask]]
+id   = "kind"
+of   = "control"
+how  = "pick"
+says = "What is it?"
+sets = "kind"
+uses = "kind"
+note = "The shape decides what else is worth asking."
+
+[[ask]]
+id   = "which_way"
+of   = "control"
+how  = "pick"
+only = "asks_which_way"
+says = "Which way does it move?"
+sets = "dirs"
+uses = "axis"
+
+[[ask]]
+id   = "sweep"
+of   = "control"
+how  = "watch"
+only = "is_selector"
+says = "Start at one end, sweep to the other."
+sets = "states"
+note = """The position you start on never sends a press: its contact is
+already closed and shows itself by opening. That is what puts it first."""
+
+[[ask]]
+id   = "pull"
+of   = "control"
+how  = "watch"
+only = "is_trigger"
+says = "Pull it all the way and let go."
+sets = "states"
+note = """Stages that nest are cumulative: pulling through fires everything
+bound up to that stage."""
+
+[[ask]]
+id   = "returns"
+of   = "control"
+how  = "pick"
+only = "found_rest_contact"
+says = "Does it come back on its own when you let go?"
+uses = "yes_no"
+sets = "rest_returns"
+note = """Timing cannot tell a trigger's own rest contact from a separate
+latching lever you pushed back by hand. Both read the same."""
+
+[[ask]]
+id   = "click"
+of   = "control"
+how  = "press"
+only = "can_click"
+says = "Does it also click? Press the click in."
+sets = "push"
+skip = true
+
+[[ask]]
+id   = "order"
+of   = "control"
+how  = "sort"
+only = "has_directions"
+says = "Press each direction in turn."
+sets = "states"
+note = """Directions are physical, from your seat: UP is away from you,
+toward the nose."""
+
+[[ask]]
+id   = "name"
+of   = "control"
+how  = "name"
+says = "Name it."
+sets = "label"
+note = "What you would call it looking at the device."
+
+
+# ----------------------------------------------------------- the whole device
+
+[[ask]]
+id    = "reach"
+of    = "device"
+how   = "rounds"
+says  = "Press everything you can reach from here."
+sets  = "access"
+uses  = "level"
+note  = """This works out how far away each control is.
+
+A control you never press in any round is one you take your hand off the
+device to reach. That counts as the furthest anything gets."""
+
+
+# ------------------------------------------------- every control, side by side
+
+[[ask]]
+id     = "hold_ok"
+called = "comfortable to hold"
+of     = "all"
+how  = "tick"
+says = "Which ones can you hold down comfortably?"
+sets = "hold_ok"
+
+[[ask]]
+id     = "rapid_ok"
+called = "quick to click"
+of     = "all"
+how  = "tick"
+says = "Which ones can you click repeatedly?"
+sets = "rapid_ok"
+
+[[ask]]
+id     = "modifier_ok"
+called = "usable as a shift"
+of     = "all"
+how  = "tick"
+says = "Which ones could you hold down while pressing others?"
+sets = "modifier_ok"
+note = """A shift layer is a button you hold to give every other button a
+second meaning."""
+
+[[ask]]
+id     = "blind_distinct"
+called = "found without looking"
+of     = "all"
+how  = "pick"
+says = "How easily can you find each one by feel?"
+sets = "blind_distinct"
+uses = "distinct"
+note = """Put your hand on the device and try it: does your finger land on
+this one, or do you have to count buttons to find it?"""
+
+[[ask]]
+id     = "accident_risk"
+called = "hit by mistake"
+of     = "all"
+how  = "pick"
+says = "How easily could each one be pressed by mistake?"
+sets = "accident_risk"
+uses = "risk"
+note = """Could you catch it with a knuckle on the way to something else,
+or press it instead of its neighbour in a hurry?"""
+
+
+# ------------------------------------------------------------- what is on offer
+#
+# The vocabularies the questions above draw from. `dirs` is what a shape's
+# positions are called once they are in order; a shape with none has
+# positions that point nowhere, like a trigger's detents.
+
+[[vocabulary.kind]]
+name = "button"
+says = "single button"
+hint = ["One position, sprung."]
+
+[[vocabulary.kind]]
+name = "paddle"
+says = "paddle / pinky lever"
+hint = ["Sits under a finger without regripping."]
+
+[[vocabulary.kind]]
+name = "hat2"
+says = "two-way hat or rocker (springs back)"
+# Two positions that point somewhere, and nothing about the shape says
+# where: a rocker can be any of three pairs.
+asks_way = true
+hint = ["Two positions, sprung to a centre that sends nothing."]
+
+[[vocabulary.kind]]
+name = "hat4"
+says = "four-way hat"
+dirs = ["up", "right", "down", "left"]
+hint = ["Four positions under one finger."]
+
+[[vocabulary.kind]]
+name = "hat8"
+says = "eight-way hat"
+dirs = ["up", "right", "down", "left"]
+hint = ["Four positions and the diagonals between them.",
+        "A diagonal is two contacts at once, not a ninth position."]
+
+[[vocabulary.kind]]
+name = "trigger"
+says = "multi-stage trigger"
+hint = ["One squeeze, two or three detents that nest."]
+
+[[vocabulary.kind]]
+name = "switch2"
+says = "two-position switch (stays put)"
+hint = ["Flips and STAYS, so a contact is held."]
+
+[[vocabulary.kind]]
+name = "switch3"
+says = "three-position switch"
+hint = ["Three detents. The centre may send nothing."]
+
+[[vocabulary.kind]]
+name = "latch"
+says = "latching lever or flap"
+hint = ["Two positions and it stays where you put it.",
+        "The game sees the button HELD, not pressed."]
+
+[[vocabulary.kind]]
+name = "selector"
+says = "rotary selector (3+ positions)"
+hint = ["One HELD contact per position, one closed at a time."]
+
+[[vocabulary.kind]]
+name = "encoder"
+says = "rotary encoder (detents)"
+dirs = ["ccw", "cw"]
+hint = ["Clicks round rather than sweeping."]
+
+[[vocabulary.kind]]
+name = "dial"
+says = "dial / thumbwheel"
+hint = ["Turns smoothly and reports an axis, not detented buttons.",
+        "Often presses in as well."]
+
+[[vocabulary.kind]]
+name = "ministick"
+says = "mini-stick"
+hint = ["Self-centring: two axes and often a press.",
+        "Recorded as one control, so the click stays with its axes."]
+
+[[vocabulary.axis]]
+name = "up_down"
+says = "up and down"
+dirs = ["up", "down"]
+
+[[vocabulary.axis]]
+name = "left_right"
+says = "left and right"
+dirs = ["left", "right"]
+
+[[vocabulary.axis]]
+name = "fwd_aft"
+says = "forward and back"
+dirs = ["fwd", "aft"]
+
+# Worded to read in a sentence -- "Reach: thumb, in the normal grip" --
+# because that is where they are used. The names are for the file.
+
+[[vocabulary.level]]
+name = "HOME"
+says = "in the normal grip"
+hint = ["Your normal grip. Nothing moves: no stretching, no shifting your hand."]
+
+[[vocabulary.level]]
+name = "EXTENDED"
+says = "by stretching"
+hint = ["Your hand stays in the grip. Only the finger stretches."]
+
+[[vocabulary.level]]
+name = "BASE"
+says = "with your hand off the grip"
+hint = ["You let go of the grip, but your hand stays on the device."]
+
+[[vocabulary.distinct]]
+name = "high"
+says = "found at once, by shape"
+
+[[vocabulary.distinct]]
+name = "low"
+says = "found, but you have to feel for it"
+
+[[vocabulary.distinct]]
+name = "none"
+says = "one of a row of identical things"
+
+[[vocabulary.risk]]
+name = "low"
+says = "nothing near it, nothing to catch"
+
+[[vocabulary.risk]]
+name = "med"
+says = "reachable by accident while doing something else"
+
+[[vocabulary.risk]]
+name = "high"
+says = "next to something you press in a hurry"
+
+[[vocabulary.yes_no]]
+name = "yes"
+says = "yes"
+
+[[vocabulary.yes_no]]
+name = "no"
+says = "no"

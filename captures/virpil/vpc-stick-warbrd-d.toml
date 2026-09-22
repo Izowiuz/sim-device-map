@@ -49,7 +49,6 @@ hid    = "X"
 rest   = "centred"
 kind   = "stick-x"
 label  = "Main stick, left/right"
-suits  = ["flight-roll"]
 source = "measured"
 
 [[axis]]
@@ -59,9 +58,8 @@ hid    = "Y"
 rest   = "centred"
 kind   = "stick-y"
 label  = "Main stick, fore/aft"
-suits  = ["flight-pitch"]
-note   = "Wants inverting in every sim: stick back = nose up."
 source = "measured"
+note   = "Wants inverting in every sim: stick back = nose up."
 
 [[axis]]
 index  = 2
@@ -71,7 +69,6 @@ rest   = "centred"
 travel = "analog"
 kind   = "twist"
 label  = "Stick twist"
-suits  = ["flight-yaw"]
 source = "measured"
 
 [[axis]]
@@ -81,7 +78,6 @@ hid    = "Rx"
 rest   = "centred"
 kind   = "mini-stick-x"
 label  = "Thumb mini-stick, horizontal"
-suits  = ["view", "cue", "aim"]
 source = "measured"
 
 [[axis]]
@@ -92,7 +88,6 @@ rest   = "centred"
 travel = "analog"
 kind   = "mini-stick-y"
 label  = "Thumb mini-stick, vertical"
-suits  = ["cue", "aim", "view"]
 source = "measured"
 
 [[axis]]
@@ -102,125 +97,137 @@ hid    = "Slider"
 rest   = "min"
 kind   = "lever"
 label  = "Analogue lever on the grip"
-suits  = ["brake"]
 source = "measured"
 
 # ------------------------------------------------------------------ buttons
 
 [[group]]
-kind   = "ministick"
-buttons= []
-push   = 5
-axes   = [3, 4]
-label  = "Mini-stick"
-reach  = "thumb, without releasing grip"
-suits  = ["view"]
-source = "measured"
-
-[[group]]
 kind   = "latch"
-buttons= [1, 0]
+id     = "trigger-initial-lever"
 label  = "Trigger initial lever"
-reach  = "index finger, on the grip"
-suits  = ["state"]
 source = "measured"
+states = [
+    { button = 1, latching = true },
+    { button = 0, latching = true },
+]
 
 [[group]]
 kind   = "trigger"
-buttons= [2, 3, 4]
-stages = ["first", "second", "third"]
-cumulative= true
+id     = "main-trigger"
+cumulative = true
 label  = "Main trigger"
-reach  = "index finger, on the grip"
-suits  = ["fire", "fire-escalating"]
 source = "measured"
+states = [
+    { name = "first",  button = 2 },
+    { name = "second", button = 3 },
+    { name = "third",  button = 4 },
+]
+
+[[group]]
+kind   = "ministick"
+id     = "mini-stick"
+axes   = [3, 4]
+label  = "Mini-stick"
+source = "measured"
+states = [
+    { name = "push", button = 5, role = "push" },
+]
 
 [[group]]
 kind   = "button"
-buttons= [6]
+id     = "thumb-top-button"
 label  = "Thumb top button"
-reach  = "thumb, without releasing grip"
-suits  = ["reflex", "fire"]
 source = "measured"
+states = [
+    { button = 6 },
+]
 
 [[group]]
 kind   = "hat4"
-buttons= [8, 11, 10, 9]
-dirs   = ["up", "right", "down", "left"]
-push   = 7
+id     = "top-thumb-hat"
 label  = "Top thumb hat"
-reach  = "thumb, without releasing grip"
-suits  = ["reflex", "lock", "sensor", "view", "trim"]
 source = "measured"
+states = [
+    { name = "up",    button = 8,  direction = "up" },
+    { name = "right", button = 11, direction = "right" },
+    { name = "down",  button = 10, direction = "down" },
+    { name = "left",  button = 9,  direction = "left" },
+    { name = "push",  button = 7,  role = "push" },
+]
 
 [[group]]
 kind   = "button"
-buttons= [12]
+id     = "thumb-bottom-button"
 label  = "Thumb bottom button"
-reach  = "thumb, without releasing grip"
-suits  = ["reflex", "fire"]
 source = "measured"
+states = [
+    { button = 12 },
+]
 
 [[group]]
 kind   = "hat4"
-buttons= [14, 17, 16, 15]
-dirs   = ["up", "right", "down", "left"]
-push   = 13
+id     = "bottom-thumb-hat"
 label  = "Bottom thumb hat"
-reach  = "thumb, without releasing grip"
-suits  = ["reflex", "lock", "sensor", "view", "trim"]
 source = "measured"
-
-[[group]]
-kind   = "unwired"
-buttons= [19, 27, 28, 29]
-label  = "Reported by the firmware, nothing attached"
-source = "measured"
+states = [
+    { name = "up",    button = 14, direction = "up" },
+    { name = "right", button = 17, direction = "right" },
+    { name = "down",  button = 16, direction = "down" },
+    { name = "left",  button = 15, direction = "left" },
+    { name = "push",  button = 13, role = "push" },
+]
 
 [[group]]
 kind   = "encoder"
-buttons= [21, 20]
-dirs   = ["ccw", "cw"]
-push   = 18
+id     = "stick-encoder-and-click"
 label  = "Stick encoder and click"
-reach  = "thumb, without releasing grip"
-suits  = ["trim"]
 source = "measured"
+states = [
+    { name = "ccw",  button = 21, direction = "ccw" },
+    { name = "cw",   button = 20, direction = "cw" },
+    { name = "push", button = 18, role = "push" },
+]
+
+[[group]]
+kind   = "unwired"
+id     = "reported-by-the-firmware-nothing-attached"
+label  = "Reported by the firmware, nothing attached"
+source = "measured"
+states = [
+    { button = 19 },
+    { button = 27 },
+    { button = 28 },
+    { button = 29 },
+]
 
 [[group]]
 kind   = "hat4"
-buttons= [23, 26, 25, 24]
-dirs   = ["up", "right", "down", "left"]
-push   = 22
+id     = "grip-thumb-hat"
 label  = "Grip thumb hat"
-reach  = "thumb, without releasing grip"
-suits  = ["reflex", "sensor", "view", "trim"]
 source = "measured"
+states = [
+    { name = "up",    button = 23, direction = "up" },
+    { name = "right", button = 26, direction = "right" },
+    { name = "down",  button = 25, direction = "down" },
+    { name = "left",  button = 24, direction = "left" },
+    { name = "push",  button = 22, role = "push" },
+]
 
 [[group]]
 kind   = "button"
-buttons= [30]
+id     = "grip-pinky-button"
 label  = "Grip pinky button"
-reach  = "needs letting go"
-suits  = ["occasional"]
 source = "measured"
+states = [
+    { button = 30 },
+]
 
 [[group]]
-# MEASURED 2026-09-17 with together.py: button 31 and axis 5 are ONE piece of
-# plastic. Two squeeze cycles, the same shape both times -- the switch closes
-# at about -26000 of the axis, a hair off the rest position, and stays closed
-# until roughly -16000 on the way back. So it is held for nearly the whole
-# squeeze, not tripped at the end of travel.
-#
-# It was recorded as a separate "Paddle button" before, and that name came from
-# a DCS command called "... (Paddle) Switch" being read as a description of the
-# hardware. The circle closed when that very command got bound back to it. What
-# the label cost: War Thunder had ID_FLARES here, so braking emptied the
-# countermeasures; BMS held SimAPOverride; the Hornet held AP/NWS disengage.
 kind   = "lever"
+id     = "analogue-brake-lever-on-the-grip"
 axes   = [5]
-travel_contact = 31
 label  = "Analogue brake lever on the grip"
-reach  = "pinky finger, without releasing grip"
-suits  = ["brake"]
 source = "measured"
+states = [
+    { name = "travel", button = 31, role = "travel", latching = true },
+]

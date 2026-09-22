@@ -48,7 +48,6 @@ hid    = "X"
 rest   = "centred"
 kind   = "mini-stick-x"
 label  = "Thumb mini-stick, horizontal"
-suits  = ["view", "cue"]
 source = "measured"
 
 [[axis]]
@@ -59,7 +58,6 @@ rest   = "centred"
 travel = "analog"
 kind   = "mini-stick-y"
 label  = "Thumb mini-stick, vertical"
-suits  = ["view", "cue"]
 source = "measured"
 
 [[axis]]
@@ -70,10 +68,9 @@ rest   = "mid"
 travel = "analog"
 kind   = "lever"
 label  = "Left throttle lever"
-suits  = ["throttle", "collective"]
-source = "measured"
 moves_with = [3]
 coupling = "switchable"
+source = "measured"
 
 [[axis]]
 index  = 3
@@ -83,10 +80,9 @@ rest   = "mid"
 travel = "analog"
 kind   = "lever"
 label  = "Right throttle lever"
-suits  = ["throttle", "zoom", "prop-pitch", "sweep"]
-source = "measured"
 moves_with = [2]
 coupling = "switchable"
+source = "measured"
 note   = """MEASURED 2026-09-17 with probe.py: 52 consecutive pairs, identical values, 0.00s apart every time -- so while the catch is engaged the right lever is spare only in the file. THIS IS A MODE, not a property: the levers uncouple. Splitting them is what makes the per-engine Thrust Left / Thrust Right split in DCS actually do something; joined, both engines get the same number. War Thunder pitch trim went here once and trimmed on every power change."""
 
 [[axis]]
@@ -97,7 +93,6 @@ rest   = "min"
 travel = "analog"
 kind   = "lever"
 label  = "Side lever"
-suits  = ["collective", "cue", "zoom", "sweep", "radiator"]
 source = "measured"
 
 [[axis]]
@@ -107,9 +102,8 @@ hid    = "Slider"
 rest   = "min"
 kind   = "slider"
 label  = "Slider"
-suits  = ["zoom", "brake", "prop-pitch"]
-note   = "Resting at minimum makes it safe for an axis where zero means off."
 source = "measured"
+note   = "Resting at minimum makes it safe for an axis where zero means off."
 
 [[axis]]
 index  = 6
@@ -118,244 +112,277 @@ hid    = "Dial"
 rest   = "centred"
 kind   = "dial"
 label  = "Rotary dial"
-suits  = ["trim", "zoom", "prop-pitch", "radiator"]
-note   = """HID calls it a Dial, so it is a rotary rather than a lever -- the best home for a trim axis. Unconfirmed whether it is an absolute pot or an endless encoder; an endless one would not suit an absolute axis."""
 source = "measured"
+note   = """HID calls it a Dial, so it is a rotary rather than a lever -- the best home for a trim axis. Unconfirmed whether it is an absolute pot or an endless encoder; an endless one would not suit an absolute axis."""
 
 # ------------------------------------------------------------------ buttons
 
 [[group]]
+kind   = "button"
+id     = "pinky-button"
+label  = "Pinky button"
+source = "measured"
+states = [
+    { button = 0 },
+]
+
+[[group]]
 kind   = "dial"
-buttons= []
-push   = 1
+id     = "left-side-dial"
 axes   = [5]
 label  = "Left side dial"
-reach  = "needs letting go"
-suits  = ["trim", "occasional"]
 source = "measured"
+states = [
+    { name = "push", button = 1, role = "push" },
+]
 
 [[group]]
 kind   = "button"
-buttons= [0]
-label  = "Pinky button"
-reach  = "pinky finger, without releasing grip"
-suits  = ["reflex", "occasional"]
-source = "measured"
-
-[[group]]
-kind   = "dial"
-buttons= []
-push   = 8
-axes   = [6]
-label  = "Right side dial"
-reach  = "needs letting go"
-suits  = ["trim", "occasional"]
-source = "measured"
-
-[[group]]
-kind   = "ministick"
-buttons= []
-push   = 14
-axes   = [0, 1]
-label  = "Thumb mini-stick"
-reach  = "thumb, without releasing grip"
-suits  = ["view"]
-source = "measured"
-
-[[group]]
-kind   = "button"
-buttons= [2]
+id     = "middle-finger-button"
 label  = "Middle finger button"
-reach  = "middle/ring finger, without releasing grip"
-suits  = ["reflex", "occasional"]
 source = "measured"
+states = [
+    { button = 2 },
+]
 
 [[group]]
 kind   = "hat4"
-buttons= [4, 5, 6, 7]
-dirs   = ["up", "right", "down", "left"]
-push   = 3
+id     = "middle-finger-hat"
 label  = "Middle finger hat"
-reach  = "middle/ring finger, without releasing grip"
-suits  = ["reflex", "sensor", "view", "trim"]
 source = "measured"
+states = [
+    { name = "up",    button = 4, direction = "up" },
+    { name = "right", button = 5, direction = "right" },
+    { name = "down",  button = 6, direction = "down" },
+    { name = "left",  button = 7, direction = "left" },
+    { name = "push",  button = 3, role = "push" },
+]
+
+[[group]]
+kind   = "dial"
+id     = "right-side-dial"
+axes   = [6]
+label  = "Right side dial"
+source = "measured"
+states = [
+    { name = "push", button = 8, role = "push" },
+]
 
 [[group]]
 kind   = "hat2"
-buttons= [10, 12]
-dirs   = ["forward", "back"]
-push   = 9
+id     = "thumb-two-way-hat"
 label  = "Thumb two-way hat"
-reach  = "thumb, without releasing grip"
-suits  = ["reflex", "stepped-pair"]
 source = "measured"
+states = [
+    { name = "fwd",  button = 10, direction = "fwd" },
+    { name = "aft",  button = 12, direction = "aft" },
+    { name = "push", button = 9,  role = "push" },
+]
 
 [[group]]
 kind   = "unwired"
-buttons= [11, 13]
+id     = "reported-by-the-firmware-nothing-attached"
 label  = "Reported by the firmware, nothing attached"
 source = "measured"
+states = [
+    { button = 11 },
+    { button = 13 },
+]
+
+[[group]]
+kind   = "ministick"
+id     = "thumb-mini-stick"
+axes   = [0, 1]
+label  = "Thumb mini-stick"
+source = "measured"
+states = [
+    { name = "push", button = 14, role = "push" },
+]
 
 [[group]]
 kind   = "button"
-buttons= [15]
+id     = "thumb-button"
 label  = "Thumb button"
-reach  = "thumb, without releasing grip"
-suits  = ["reflex", "occasional"]
 source = "measured"
+states = [
+    { button = 15 },
+]
 
 [[group]]
 kind   = "button"
-buttons= [16]
+id     = "bottom-thumb-button"
 label  = "Bottom thumb button"
-reach  = "thumb, without releasing grip"
-suits  = ["reflex", "occasional"]
 source = "measured"
+states = [
+    { button = 16 },
+]
 
 [[group]]
 kind   = "hat4"
-buttons= [18, 19, 20, 21]
-dirs   = ["up", "right", "down", "left"]
-push   = 17
+id     = "thumb-hat"
 label  = "Thumb hat"
-reach  = "thumb, without releasing grip"
-suits  = ["reflex", "sensor", "view", "trim"]
 source = "measured"
+states = [
+    { name = "up",    button = 18, direction = "up" },
+    { name = "right", button = 19, direction = "right" },
+    { name = "down",  button = 20, direction = "down" },
+    { name = "left",  button = 21, direction = "left" },
+    { name = "push",  button = 17, role = "push" },
+]
 
 [[group]]
 kind   = "button"
-buttons= [22]
+id     = "keyboard-b1-button"
 label  = "Keyboard B1 button"
-reach  = "needs letting go"
-suits  = ["occasional"]
 source = "measured"
+states = [
+    { button = 22 },
+]
 
 [[group]]
 kind   = "button"
-buttons= [23]
+id     = "keyboard-b2-button"
 label  = "Keyboard B2 button"
-reach  = "needs letting go"
-suits  = ["occasional"]
 source = "measured"
+states = [
+    { button = 23 },
+]
 
 [[group]]
 kind   = "button"
-buttons= [24]
+id     = "keyboard-b3-button"
 label  = "Keyboard B3 button"
-reach  = "needs letting go"
-suits  = ["occasional"]
 source = "measured"
+states = [
+    { button = 24 },
+]
 
 [[group]]
 kind   = "button"
-buttons= [25]
+id     = "keyboard-b4-button"
 label  = "Keyboard B4 button"
-reach  = "needs letting go"
-suits  = ["occasional"]
 source = "measured"
+states = [
+    { button = 25 },
+]
 
 [[group]]
 kind   = "button"
-buttons= [26]
+id     = "keyboard-b5-button"
 label  = "Keyboard B5 button"
-reach  = "needs letting go"
-suits  = ["occasional"]
 source = "measured"
+states = [
+    { button = 26 },
+]
 
 [[group]]
 kind   = "button"
-buttons= [27]
+id     = "keyboard-b6-button"
 label  = "Keyboard B6 button"
-reach  = "needs letting go"
-suits  = ["occasional"]
 source = "measured"
+states = [
+    { button = 27 },
+]
 
 [[group]]
 kind   = "button"
-buttons= [28]
+id     = "big-red-button"
 label  = "Big red button"
-reach  = "needs letting go"
-suits  = ["occasional"]
 source = "measured"
+states = [
+    { button = 28 },
+]
 
 [[group]]
 kind   = "hat2"
-buttons= [29, 30]
-dirs   = ["up", "down"]
+id     = "t1-rocker"
 label  = "T1 rocker"
-reach  = "needs letting go"
-suits  = ["stepped-pair"]
 source = "measured"
+states = [
+    { name = "up",   button = 29, direction = "up" },
+    { name = "down", button = 30, direction = "down" },
+]
 
 [[group]]
 kind   = "hat2"
-buttons= [31, 32]
-dirs   = ["up", "down"]
+id     = "t2-rocker"
 label  = "T2 rocker"
-reach  = "needs letting go"
-suits  = ["stepped-pair"]
 source = "measured"
+states = [
+    { name = "up",   button = 31, direction = "up" },
+    { name = "down", button = 32, direction = "down" },
+]
 
 [[group]]
 kind   = "hat2"
-buttons= [33, 34]
-dirs   = ["up", "down"]
+id     = "t3-rocker"
 label  = "T3 rocker"
-reach  = "needs letting go"
-suits  = ["stepped-pair"]
 source = "measured"
+states = [
+    { name = "up",   button = 33, direction = "up" },
+    { name = "down", button = 34, direction = "down" },
+]
 
 [[group]]
 kind   = "hat2"
-buttons= [35, 36]
-dirs   = ["up", "down"]
+id     = "t4-rocker"
 label  = "T4 rocker"
-reach  = "needs letting go"
-suits  = ["stepped-pair"]
 source = "measured"
+states = [
+    { name = "up",   button = 35, direction = "up" },
+    { name = "down", button = 36, direction = "down" },
+]
 
 [[group]]
 kind   = "hat2"
-buttons= [37, 38]
-dirs   = ["up", "down"]
+id     = "t5-rocker"
 label  = "T5 rocker"
-reach  = "needs letting go"
-suits  = ["stepped-pair"]
 source = "measured"
+states = [
+    { name = "up",   button = 37, direction = "up" },
+    { name = "down", button = 38, direction = "down" },
+]
 
 [[group]]
 kind   = "button"
-buttons= [39]
+id     = "apu-button"
 label  = "APU button"
-reach  = "needs letting go"
-suits  = ["occasional"]
 source = "measured"
+states = [
+    { button = 39 },
+]
 
 [[group]]
 kind   = "encoder"
-buttons= [41, 42]
-dirs   = ["ccw", "cw"]
-push   = 40
+id     = "e1-encoder"
 label  = "E1 encoder"
-reach  = "needs letting go"
-suits  = ["trim", "occasional"]
 source = "measured"
+states = [
+    { name = "ccw",  button = 41, direction = "ccw" },
+    { name = "cw",   button = 42, direction = "cw" },
+    { name = "push", button = 40, role = "push" },
+]
 
 [[group]]
 kind   = "encoder"
-buttons= [45, 44]
-dirs   = ["ccw", "cw"]
-push   = 43
+id     = "e2-encoder"
 label  = "E2 encoder"
-reach  = "needs letting go"
-suits  = ["trim", "occasional"]
 source = "measured"
+states = [
+    { name = "ccw",  button = 45, direction = "ccw" },
+    { name = "cw",   button = 44, direction = "cw" },
+    { name = "push", button = 43, role = "push" },
+]
 
 [[group]]
 kind   = "selector"
-buttons= [50, 49, 48, 47, 46]
-positions= ["1", "2", "3", "4", "5"]
+id     = "mode-selector"
 label  = "Mode selector"
-reach  = "needs letting go"
-suits  = ["state"]
 source = "measured"
+states = [
+    { name = "1", button = 50, latching = true },
+    { name = "2", button = 49, latching = true },
+    { name = "3", button = 48, latching = true },
+    { name = "4", button = 47, latching = true },
+    { name = "5", button = 46, latching = true },
+]

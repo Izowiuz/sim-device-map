@@ -22,106 +22,22 @@ import os
 import select
 import struct
 import time
+import tomllib
 
 import devicemap
+import questions
+import screens
+import tui as ui
 
 JS_EVENT_BUTTON, JS_EVENT_AXIS, JS_EVENT_INIT = 0x01, 0x02, 0x80
 
 # slug, menu label, direction names, the rows shown while the cursor is on it
-KINDS = [
-    ('hat2', 'two-way hat or rocker (springs back)', ['up', 'down'],
-     ['Two directions, sprung to the centre, often pressing in as well.',
-      'The centre sends nothing. Wants a stepped pair -- flaps up and',
-      'down, trim up and down -- not one toggle across both.']),
-    ('hat4', 'four-way hat', ['up', 'right', 'down', 'left'],
-     ['Four directions under one thumb.',
-      'Wants four related actions: views, trim, radar.']),
-    ('hat8', 'eight-way hat', ['up', 'up-right', 'right', 'down-right',
-                               'down', 'down-left', 'left', 'up-left'],
-     ['Eight directions. Same idea, more room.',
-      'Usually views, where the diagonals earn their keep.']),
-    ('trigger', 'multi-stage trigger', ['first', 'second', 'third'],
-     ['One squeeze, two or three detents.',
-      'Wants fire groups that escalate: guns, then cannon.']),
-    ('switch2', 'two-position switch (stays put)', ['one end', 'other end'],
-     ['Flips and STAYS where you put it, so a contact is held.',
-      'Bind ONE toggle to both ends: every flip changes the state.']),
-    ('switch3', 'three-position switch', ['one end', 'centre', 'other end'],
-     ['Three detents.',
-      'Wants a stepped pair -- flaps up and down -- centre left empty.']),
-    ('button', 'single button', [],
-     ['A plain momentary button.',
-      'What it deserves depends entirely on how you reach it.']),
-    ('paddle', 'paddle / pinky lever', [],
-     ['Sits under a finger without regripping.',
-      'Wants something reflexive: countermeasures.']),
-    ('encoder', 'rotary encoder (detents)', ['ccw', 'cw'],
-     ['Clicks round rather than sweeping.',
-      'Wants trim or zoom, one detent at a time.']),
-    ('dial', 'dial / thumbwheel (one axis, maybe a click)', [],
-     ['Turns smoothly and reports an axis, not detented buttons.',
-      'Often presses in as well. Wants trim, zoom, prop pitch.']),
-    ('ministick', 'mini-stick (two axes, maybe a click)', [],
-     ['Self-centring thumb stick: two axes and often a press.',
-      'Recorded as one control, so the click stays with its axes.']),
-    ('selector', 'rotary selector (3+ positions)', [],
-     ['One HELD contact per position, one closed at a time.',
-      'Sweep it from one end to the other and the order reads itself.',
-      'Suits a mode, a master switch, a modifier per position.']),
-    ('latch', 'latching lever or flap', [],
-     ['Two positions, and it stays where you put it.',
-      'The game sees the button HELD, not pressed -- so it suits a state',
-      'that is on while the lever is over, not a momentary action.']),
-]
-
-REACH = [
-    ('thumb, without releasing grip',
-     ['The fastest thing you own.', 'Reflex actions belong here.']),
-    ('index finger, on the grip',
-     ['Trigger territory.', 'Weapons, and nothing you must not hit.']),
-    ('middle/ring finger, without releasing grip',
-     ['Reachable mid-manoeuvre without regripping.']),
-    ('pinky finger, without releasing grip',
-     ['Reachable without regripping.',
-      'Good for countermeasures and other reflexes.']),
-    ('needs letting go',
-     ['You have to take a hand off the controls.',
-      'Only for things you do with time to spare.']),
-    ('unknown',
-     ['Leave it open if you are not sure.',
-      'Honest beats a guess: a consumer can tell the difference.']),
-]
-
-SUITS_VOCAB = [
-    ('reflex', ['Hit without thinking, mid-manoeuvre, no regrip.',
-                'Countermeasures, WEP.']),
-    ('fire', ['A weapon trigger.']),
-    ('fire-escalating', ['Stages that escalate: guns, then cannon.']),
-    ('release', ['Drop or launch: bombs, rockets.']),
-    ('lock', ['Hold to lock a seeker or a radar.']),
-    ('sensor', ['Radar and IRST handling: range, mode, next target.']),
-    ('view', ['Camera or head movement.']),
-    ('trim', ['Trim.']),
-    ('toggle', ['A state you flip and leave: gear, airbrake, radar on/off.']),
-    ('stepped-pair', ['Step up and down through positions: flaps.']),
-    ('occasional', ['You can afford to look for it: engine, map, bay door.']),
-    ('guarded', ['Must not be hit by accident: jettison.']),
-    ('state', ['On for as long as the lever is over.',
-               'Master arm, a modifier, a cover that gates something.']),
-]
-
-#: what a freshly captured control starts out ticked as, by shape
-SUITS = {
-    'hat4': ['view', 'trim', 'sensor'], 'hat8': ['view', 'sensor'],
-    'trigger': ['fire-escalating'], 'switch2': ['toggle'],
-    'switch3': ['stepped-pair'], 'button': ['occasional'],
-    'hat2': ['stepped-pair'],
-    'paddle': ['reflex'], 'encoder': ['trim', 'zoom'],
-    'latch': ['state'],
-    'ministick': ['view', 'cue', 'aim'],
-    'selector': ['state'],
-    'dial': ['trim', 'zoom'],
-}
+#: The shapes on offer, out of `questions.toml`. Held there rather than
+#: here because the wizard that replaces these flows asks about them from
+#: the same list, and two copies of a vocabulary is one copy that drifts.
+SHEET = questions.read()
+KINDS = [(k['name'], k['says'], list(k.get('dirs') or []), list(k['hint']))
+         for k in SHEET.vocabulary['kind']]
 
 AXIS_KINDS = [
     ('stick-x', 'main stick, left/right', ['The flying axis.']),
@@ -137,157 +53,6 @@ AXIS_KINDS = [
     ('pedal', 'pedal', ['Rudder, or a toe brake.']),
     ('wheel', 'wheel', ['A steering wheel.']),
 ]
-
-AXIS_SUITS = [
-    ('flight-roll', ['Roll.']), ('flight-pitch', ['Pitch.']),
-    ('flight-yaw', ['Yaw: rudder, pedals.']),
-    ('throttle', ['Engine power.']), ('collective', ['Helicopter collective.']),
-    ('brake', ['Wheel brakes. Wants to rest at zero.']),
-    ('view', ['Head or camera movement.']),
-    ('cue', ['Pointing a radar or IRST antenna.']),
-    ('aim', ['Steering a missile or a sight.']),
-    ('zoom', ['Zoom. Wants to rest at zero.']),
-    ('trim', ['Trim on an axis -- the most comfortable kind there is.']),
-    ('prop-pitch', ['Propeller pitch.']), ('sweep', ['Wing sweep.']),
-    ('radiator', ['Radiator and cowl flaps.']),
-]
-
-
-# --------------------------------------------------------------------- TUI --
-
-class Tui:
-    """Same shape as the one in dcs-bind-wizard, so both feel identical."""
-
-    HELP_ROWS = 3
-
-    def __init__(self, scr):
-        self.scr = scr
-
-    def key(self, timeout=0.0):
-        deadline = time.monotonic() + timeout
-        while True:
-            c = self.scr.getch()
-            if c == -1:
-                if time.monotonic() >= deadline:
-                    return None
-                time.sleep(0.02)
-                continue
-            if c in (10, 13, curses.KEY_ENTER):
-                return 'enter'
-            if c == 27:
-                return 'esc'
-            if c == curses.KEY_UP:
-                return 'up'
-            if c == curses.KEY_DOWN:
-                return 'down'
-            if c in (curses.KEY_BACKSPACE, 127, 8):
-                return 'backspace'
-            if 32 <= c < 127:
-                return chr(c)
-
-    def _put(self, y, x, text, attr=curses.A_NORMAL):
-        h, w = self.scr.getmaxyx()
-        if 0 <= y < h:
-            try:
-                self.scr.addstr(y, x, text[:max(0, w - x - 1)], attr)
-            except curses.error:
-                pass
-
-    def _chrome(self, title, subtitle, help_lines, status, footer):
-        """Heading on top; the explanation pinned just above the footer, so it
-        never moves while you are looking at the device instead of the screen."""
-        h, _ = self.scr.getmaxyx()
-        self._put(0, 0, title, curses.A_BOLD)
-        if subtitle:
-            self._put(1, 0, subtitle)
-        for i, line in enumerate(list(help_lines or [])[:self.HELP_ROWS]):
-            self._put(h - 3 - self.HELP_ROWS + i, 0, line)
-        self._put(h - 2, 0, status or '')
-        self._put(h - 1, 0, footer or '')
-
-    def menu(self, title, items, hints=None, subtitle='', index=0,
-             multi=False, selected=None, footer=None, status='', quits=False):
-        """Arrow through a list; the hint rows follow the cursor.
-
-        Returns an index, or a sorted list of indices when multi, or None.
-        """
-        selected = set(selected or ())
-        index = max(0, min(index, len(items) - 1))
-        top = 0
-        if footer is None:
-            back = 'Q = quit' if quits else 'ESC = back'
-            footer = (f'arrows = move, SPACE = tick, RETURN = accept, {back}'
-                      if multi else
-                      f'arrows = move, RETURN = choose, {back}')
-        while True:
-            h, _ = self.scr.getmaxyx()
-            first = 3 if subtitle else 2
-            visible = max(3, h - first - 3 - self.HELP_ROWS)
-            if index < top:
-                top = index
-            elif index >= top + visible:
-                top = index - visible + 1
-            self.scr.erase()
-            for row, i in enumerate(range(top, min(len(items), top + visible))):
-                attr = curses.A_REVERSE if i == index else curses.A_NORMAL
-                mark = ('[x] ' if i in selected else '[ ] ') if multi else ''
-                self._put(first + row, 2, f'{mark}{items[i]}', attr)
-            self._chrome(title, subtitle, hints[index] if hints else [],
-                         status, footer)
-            self.scr.refresh()
-            k = self.key(0.5)
-            if k == 'up':
-                index = (index - 1) % len(items)
-            elif k == 'down':
-                index = (index + 1) % len(items)
-            elif k == 'esc' or (quits and k in ('q', 'Q')):
-                return None
-            elif k == 'enter':
-                return sorted(selected) if multi else index
-            elif multi and k == ' ':
-                selected.symmetric_difference_update({index})
-
-    def text(self, title, help_lines, default='', subtitle=''):
-        value = default
-        while True:
-            self.scr.erase()
-            self._put(3 if subtitle else 2, 2, f'{value}_', curses.A_REVERSE)
-            self._chrome(title, subtitle, help_lines,
-                         f'default: {default}' if default else '',
-                         'type, RETURN = accept, ESC = back')
-            self.scr.refresh()
-            k = self.key(0.5)
-            if k is None:
-                continue
-            if k == 'enter':
-                return value or default
-            if k == 'esc':
-                return None
-            if k == 'backspace':
-                value = value[:-1]
-            elif len(k) == 1 and k.isprintable():
-                value += k
-
-    def confirm(self, title, lines, help_lines=(), default=True):
-        while True:
-            self.scr.erase()
-            for i, ln in enumerate(lines):
-                self._put(2 + i, 2, ln)
-            self._chrome(title, '', help_lines, '',
-                         'Y = yes, N = no, ESC = back')
-            self.scr.refresh()
-            k = self.key(0.5)
-            if k in ('y', 'Y'):
-                return True
-            if k in ('n', 'N'):
-                return False
-            if k == 'esc':
-                return None
-            if k == 'enter':
-                return default
-
-
-# ------------------------------------------------------------- joystick io --
 
 def drain(fd):
     """Swallow the synthetic initial-state burst the kernel sends on open."""
@@ -310,7 +75,8 @@ def _events(fd):
         yield typ, num, val
 
 
-def collect_buttons(tui, fd, title, help_lines):
+def collect_buttons(tui, fd, title, help_lines, tail='', says='',
+                    wanted=None, right=''):
     """Buttons pressed, in first-press order, until RETURN.
 
     Also reports which are still closed at that moment: a switch that stays put
@@ -319,15 +85,18 @@ def collect_buttons(tui, fd, title, help_lines):
     """
     seen, held = [], set()
     while True:
-        tui.scr.erase()
-        tui._put(2, 2, 'press every part of ONE control, then RETURN',
-                 curses.A_BOLD)
-        for i, b in enumerate(seen):
-            tui._put(4 + i, 4, f'button {b}')
-        tui._chrome(title, '', help_lines,
-                    f'{len(seen)} so far' if seen else '',
-                    'RETURN = done, ESC = cancel')
-        tui.scr.refresh()
+        tui.screen(title,
+                   [('plain', says or 'press every part of ONE control,'
+                                    ' then RETURN')]
+                   + ([('plain', '')] if seen else [])
+                   + [_pressed(b, wanted) for b in seen]
+                   + ui.aside_of(help_lines),
+                   ('↵ done', 'ESC cancel'),
+                   tail or (f'looking for js {wanted}'
+                            if wanted is not None
+                            else ui.plural(len(seen), 'button') if seen
+                            else ''),
+                   right=right)
         if select.select([fd], [], [], 0.05)[0]:
             for typ, num, val in _events(fd):
                 if typ & JS_EVENT_BUTTON:
@@ -344,14 +113,25 @@ def collect_buttons(tui, fd, title, help_lines):
             return None, set()
 
 
+def _pressed(button, wanted):
+    """One button you just pressed, and whether it is the one you picked.
+
+    Picking `js 19` off the list tells you a number and nothing about
+    which piece of plastic it is. Saying so as you press is the only way
+    to find out short of pressing everything and counting.
+    """
+    if wanted is None:
+        return ('measured', f'button {button}')
+    said = f'js {button:<4}'
+    return (('measured', f'{said}  that one') if button == wanted
+            else ('meta', f'{said}  different button'))
+
+
 def one_button(tui, fd, title, prompt, help_lines):
     """Wait for a single press. RETURN skips and returns None."""
     while True:
-        tui.scr.erase()
-        tui._put(2, 2, prompt, curses.A_BOLD)
-        tui._chrome(title, '', help_lines, '',
-                    'press it, or RETURN to skip')
-        tui.scr.refresh()
+        tui.screen(title, [('plain', prompt)] + ui.aside_of(help_lines),
+                   ('press it', '↵ skip'))
         if select.select([fd], [], [], 0.05)[0]:
             for typ, num, val in _events(fd):
                 if typ & JS_EVENT_BUTTON and val:
@@ -381,18 +161,19 @@ def one_axis(tui, fd, title, help_lines):
     """
     start, moved, seen = {}, {}, {}
     while True:
-        best = max(moved, key=moved.get) if moved else None
+        best = max(moved, key=lambda ax: moved[ax]) if moved else None
         travel = classify_travel(seen.get(best, [])) if best is not None else ''
-        tui.scr.erase()
-        tui._put(2, 2, 'move ONE axis through its full travel, then RETURN',
-                 curses.A_BOLD)
+        said = [('plain', 'move ONE axis through its full travel,'
+                          ' then RETURN'), ('plain', '')]
         if best is not None:
-            tui._put(4, 4, f'axis {best}   (travel seen: {moved[best]})')
+            said.append(('measured',
+                         f'axis {best}   (travel seen: {moved[best]})'))
             if travel:
-                tui._put(5, 4, 'reports a continuous sweep' if travel == 'analog'
-                         else 'reports only its extremes -- a hat on an axis')
-        tui._chrome(title, '', help_lines, '', 'RETURN = accept, ESC = cancel')
-        tui.scr.refresh()
+                said.append(('meta', 'reports a continuous sweep'
+                             if travel == 'analog' else
+                             'reports only its extremes -- a hat on an axis'))
+        tui.screen(title, said + ui.aside_of(help_lines),
+                   ('↵ accept', 'ESC cancel'))
         if select.select([fd], [], [], 0.05)[0]:
             for typ, num, val in _events(fd):
                 if typ & JS_EVENT_AXIS:
@@ -413,6 +194,7 @@ def esc(s):
 
 
 def emit_str(key, val, pad=7):
+    pad = max(pad, len(key) + 1)
     if '\n' in val or len(val) > 86:
         body = val.replace('\\', '\\\\').replace('"""', '\\"\\"\\"')
         return f'{key:<{pad}}= """{body}"""'
@@ -420,6 +202,7 @@ def emit_str(key, val, pad=7):
 
 
 def emit_list(key, vals, pad=7):
+    pad = max(pad, len(key) + 1)
     if vals and isinstance(vals[0], str):
         inner = ', '.join(f'"{esc(v)}"' for v in vals)
     else:
@@ -475,48 +258,57 @@ def write_device(dev):
     out.append('\n# --------------------------------------------------------------------- axes')
     for a in raw.get('axis', []):
         out.append('\n[[axis]]')
-        out.append(f'index  = {a["index"]}')
+        out.append(emit_raw('index', str(a['index'])))
         for k in ('evdev', 'hid', 'rest', 'travel', 'kind', 'label'):
             if a.get(k):
                 out.append(emit_str(k, a[k]))
-        if a.get('suits'):
-            out.append(emit_list('suits', a['suits']))
+        # What probe.py measured about this axis moving with another. It
+        # costs nothing to carry and it is not re-derivable from a capture.
+        if a.get('moves_with'):
+            out.append(emit_list('moves_with', list(a['moves_with'])))
+        if a.get('coupling'):
+            out.append(emit_str('coupling', a['coupling']))
+        for k in ('range', 'noise'):
+            if a.get(k) is not None:
+                out.append(emit_raw(k, str(a[k])))
+        out.append(emit_str('source', a.get('source', 'unknown')))
         if a.get('note'):
             out.append(emit_str('note', a['note']))
-        out.append(emit_str('source', a.get('source', 'unknown')))
 
     out.append('\n# ------------------------------------------------------------------ buttons')
-    groups = sorted(raw.get('group', []), key=lambda g: (g['kind'] == 'unknown',
-                                                         min(g['buttons']) if g['buttons'] else 0))
+    # Upgraded and named before anything is emitted, and put back on the
+    # device: what is in memory and what is on disk are then the same shape,
+    # so the next flow to touch a group does not meet the older one.
+    groups = sorted((devicemap.upgrade(g) for g in raw.get('group', [])),
+                    key=lambda g: (g['kind'] == 'unknown',
+                                   min(all_of(g) or [0])))
+    raw['group'] = devicemap.name_ids(groups)
     for g in groups:
         out.append('\n[[group]]')
         out.append(emit_str('kind', g['kind']))
-        out.append(emit_list('buttons', g['buttons']))
-        for k in ('dirs', 'stages', 'positions'):
-            if g.get(k):
-                out.append(emit_list(k, g[k]))
-        if g.get('push') is not None:
-            out.append(f'{"push":<7}= {g["push"]}')
+        if g.get('id'):
+            out.append(emit_str('id', g['id']))
         if g.get('cumulative'):
-            out.append(f'{"cumulative":<7}= true')
-        if g.get('rest_contact') is not None:
-            out.append(f'{"rest_contact":<7}= {g["rest_contact"]}')
-        if g.get('transient'):
-            out.append(emit_list('transient', list(g['transient'])))
+            out.append(emit_raw('cumulative', 'true'))
         if g.get('axes'):
             out.append(emit_list('axes', list(g['axes'])))
-        for k in ('label', 'reach', 'rest'):
+        for k in ('label', 'rest'):
             if g.get(k):
                 out.append(emit_str(k, g[k]))
-        if g.get('suits'):
-            out.append(emit_list('suits', g['suits']))
+        for k in ('blind_distinct', 'accident_risk'):
+            if g.get(k):
+                out.append(emit_str(k, g[k]))
+        for k in ('hold_ok', 'rapid_ok', 'modifier_ok'):
+            if g.get(k) is not None:
+                out.append(emit_raw(k, 'true' if g[k] else 'false'))
         if g.get('note'):
             out.append(emit_str('note', g['note']))
         out.append(emit_str('source', g.get('source', 'unknown')))
+        if g.get('states'):
+            out.extend(emit_states(g['states']))
 
     tmp = dev.path + '.tmp'
     open(tmp, 'w', encoding='utf-8').write('\n'.join(out) + '\n')
-    import tomllib
     with open(tmp, 'rb') as f:              # never leave a broken file behind
         tomllib.load(f)
     os.replace(tmp, dev.path)
@@ -526,11 +318,81 @@ def write_device(dev):
 
 # -------------------------------------------------------------------- flow --
 
+def write_profile(prof):
+    """Write a rig back out, the same way a device file is written.
+
+    Validated by reading the temporary file before it replaces the real
+    one, so a crash halfway through leaves the rig you had.
+
+    Everything before the first `name =` is kept: it is prose somebody
+    wrote about this desk and nothing regenerates it.
+    """
+    out = []
+    try:
+        with open(prof.path) as fh:
+            head = fh.read()
+        cut = head.index('\nname')
+        out.append(head[:cut].rstrip('\n'))
+    except (OSError, ValueError):
+        pass
+    out.append('' if not out else '')
+    out.append(emit_str('name', prof.name, 4))
+    for said in prof.devices:
+        out.append('\n[[device]]')
+        for k in ('slug', 'role', 'hand'):
+            if said.get(k):
+                out.append(emit_str(k, said[k], 4))
+        if said.get('leaving_home_releases_flight'):
+            out.append(emit_raw('leaving_home_releases_flight', 'true', 4))
+        walked = said.get('rounds') or []
+        if walked:
+            out.append(emit_raw('rounds', '[', 4))
+            for lvl, finger in walked:
+                out.append(f'    [{emit_val(lvl)}, {emit_val(finger)}],')
+            out.append(']')
+        access = {c: spots for c, spots in (said.get('access') or {}).items()
+                  if spots}
+        if not access:
+            continue
+        out.append('\n[device.access]')
+        wide = max(len(c) for c in access)
+        for ctrl in sorted(access):
+            rows = [_spot_said(sp) for sp in access[ctrl]]
+            if len(rows) == 1:
+                out.append(f'{ctrl:<{wide}} = [{rows[0]}]')
+            else:
+                out.append(f'{ctrl:<{wide}} = [')
+                out.extend(f'    {r},' for r in rows)
+                out.append(']')
+
+    text = '\n'.join(out).lstrip('\n') + '\n'
+    tmp = prof.path + '.tmp'
+    with open(tmp, 'w') as fh:
+        fh.write(text)
+    with open(tmp, 'rb') as fh:
+        tomllib.load(fh)
+    os.replace(tmp, prof.path)
+
+
+def _spot_said(spot):
+    """One way of reaching a control, as an inline table."""
+    got = spot if isinstance(spot, dict) else {
+        'part': spot.part, 'level': spot.level, 'finger': spot.finger,
+        'how': spot.how}
+    bits = [f'part = {emit_val(got["part"])}',
+            f'level = {emit_val(got["level"])}']
+    if got.get('finger'):
+        bits.append(f'finger = {emit_val(got["finger"])}')
+    if got.get('how') and got['how'] != 'measured':
+        bits.append(f'how = {emit_val(got["how"])}')
+    return '{ ' + ', '.join(bits) + ' }'
+
+
 def unknown_group(raw):
     """The bucket of not-yet-captured buttons, created if it was emptied."""
     g = next((x for x in raw['group'] if x['kind'] == 'unknown'), None)
     if g is None:
-        g = {'kind': 'unknown', 'buttons': [], 'label': 'Not yet captured',
+        g = {'kind': 'unknown', 'states': [], 'label': 'Not yet captured',
              'source': 'unknown'}
         raw['group'].append(g)
     return g
@@ -551,21 +413,97 @@ def reconcile(raw, n_buttons):
     if missing:
         if u is None:
             u = {'kind': 'unknown', 'label': 'Not yet captured',
-                 'source': 'unknown', 'buttons': []}
+                 'source': 'unknown', 'states': []}
             raw['group'].append(u)
-        u['buttons'] = missing
+        set_buttons(u, missing)
     elif u is not None:
         raw['group'].remove(u)
     return missing
 
 
 def all_of(g):
-    out = list(g['buttons'])
-    for k in ('push', 'rest_contact'):
-        if g.get(k) is not None:
-            out.append(g[k])
-    out.extend(g.get('transient') or [])
+    """`Group.all_buttons` over the raw dict, before it is parsed."""
+    return [s['button'] for s in devicemap.upgrade(g).get('states') or []
+            if s.get('button') is not None]
+
+
+def buttons_of(g):
+    """A raw group's position buttons, in press order, whatever shape the
+    dict is in. The contacts it also owns are in `all_of`."""
+    return [st['button'] for st in devicemap.upgrade(g).get('states') or []
+            if not st.get('role') and st.get('button') is not None]
+
+
+def set_buttons(g, buttons, names=()):
+    """Give a raw group these positions in place, keeping its contacts.
+
+    `names` are a hat's directions or a trigger's detents. A control whose
+    positions have no names -- a plain button, the uncaptured bucket --
+    passes none.
+    """
+    up = devicemap.upgrade(dict(g))
+    for dead in set(g) - set(up):
+        del g[dead]
+    g.update(up)
+    kept = [st for st in g.get('states') or [] if st.get('role')]
+    made = []
+    for n, b in enumerate(buttons):
+        st = {'button': b}
+        if n < len(names) and names[n]:
+            st['name'] = names[n]
+            if g['kind'] not in ('trigger', 'selector'):
+                st['direction'] = names[n]
+        if g['kind'] in devicemap.LATCHING:
+            st['latching'] = True
+        made.append(st)
+    g['states'] = made + kept
+    return g
+
+
+def emit_states(states, pad=7):
+    """One position per line, its columns lined up with the next one's.
+
+    A position is four facts at most, so it reads as a row. The same list
+    with one key per line is forty lines for a hat that clicks, and nothing
+    in it is worth a line of its own.
+    """
+    rows = []
+    for st in states:
+        bits = []
+        if st.get('name'):
+            bits.append(('name', emit_val(st['name'])))
+        if st.get('button') is not None:
+            bits.append(('button', str(st['button'])))
+        for k in ('direction', 'role'):
+            if st.get(k):
+                bits.append((k, emit_val(st[k])))
+        if st.get('latching'):
+            bits.append(('latching', 'true'))
+        if st.get('emits_signal') is False:
+            bits.append(('emits_signal', 'false'))
+        rows.append(bits)
+    wide = {}
+    for bits in rows:
+        for k, v in bits:
+            wide[k] = max(wide.get(k, 0), len(v))
+    out = [emit_raw('states', '[', pad)]
+    for bits in rows:
+        said = ' '.join(f'{k} = {v}' if i == len(bits) - 1
+                        else f'{k} = {v + ",":<{wide[k] + 1}}'
+                        for i, (k, v) in enumerate(bits))
+        out.append(f'    {{ {said} }},')
+    out.append(']')
     return out
+
+
+def emit_raw(key, text, pad=7):
+    """A key and an already-formatted value, in the same column as the rest."""
+    return f'{key:<{max(pad, len(key) + 1)}}= {text}'
+
+
+def emit_val(v):
+    """A TOML scalar, quoted if it is a string."""
+    return f'"{esc(v)}"' if isinstance(v, str) else str(v)
 
 
 def analyse_selector(events):
@@ -606,20 +544,18 @@ def observe_selector(tui, fd, title):
     t0 = time.monotonic()
     while True:
         got = analyse_selector(events)
-        tui.scr.erase()
-        tui._put(2, 2, 'start at one end, sweep to the other, then RETURN',
-                 curses.A_BOLD)
-        for i, b in enumerate(got['order']):
-            tui._put(4 + i, 4, f'position {i + 1}:  button {b}')
+        said = [('plain', 'start at one end, sweep to the other,'
+                          ' then RETURN'), ('plain', '')]
+        said += [('measured', f'position {i + 1}:  button {b}')
+                 for i, b in enumerate(got['order'])]
         if got['order'] and not got['exclusive']:
-            tui._put(5 + len(got['order']), 4,
-                     'more than one closed at once -- not a selector?')
-        tui._chrome(title, '',
-                    ['The position you start on never sends a press: its',
-                     'contact is already closed and only shows itself by',
-                     'opening. That is what puts it first.'],
-                    f'{len(events)} events', 'RETURN = done, ESC = cancel')
-        tui.scr.refresh()
+            said.append(('unset',
+                         'more than one closed at once -- not a selector?'))
+        tui.screen(title, said + ui.aside_of(
+            ['The position you start on never sends a press: its contact is',
+             'already closed and only shows itself by opening. That is what',
+             'puts it first.']),
+            ('↵ done', 'ESC cancel'), ui.plural(len(events), 'event'))
         if select.select([fd], [], [], 0.05)[0]:
             for typ, num, val in _events(fd):
                 if typ & JS_EVENT_BUTTON:
@@ -692,27 +628,21 @@ def observe_trigger(tui, fd, title):
     t0 = time.monotonic()
     while True:
         got = analyse_trigger(events)
-        tui.scr.erase()
-        tui._put(2, 2, 'pull it all the way and let go, then RETURN',
-                 curses.A_BOLD)
-        y = 4
-        for i, b in enumerate(got['stages']):
-            tui._put(y, 4, f'stage {i + 1}:       button {b}')
-            y += 1
+        said = [('plain', 'pull it all the way and let go, then RETURN'),
+                ('plain', '')]
+        said += [('measured', f'stage {i + 1}:       button {b}')
+                 for i, b in enumerate(got['stages'])]
         if got['rest'] is not None:
-            tui._put(y, 4, f'rest contact:  button {got["rest"]}'
-                           f'   (closed when untouched)')
-            y += 1
-        for b in got['transient']:
-            tui._put(y, 4, f'passing:       button {b}'
-                           f'   (fires again on the way out)')
-            y += 1
-        tui._chrome(title, '',
-                    ['Stages that nest are cumulative: pulling through fires',
-                     'everything bound up to that stage. A rest or passing',
-                     'contact is recorded but never offered for binding.'],
-                    f'{len(events)} events', 'RETURN = done, ESC = cancel')
-        tui.scr.refresh()
+            said.append(('guessed', f'rest contact:  button {got["rest"]}'
+                                    '   (closed when untouched)'))
+        said += [('guessed', f'passing:       button {b}'
+                             '   (fires again on the way out)')
+                 for b in got['transient']]
+        tui.screen(title, said + ui.aside_of(
+            ['Stages that nest are cumulative: pulling through fires',
+             'everything bound up to that stage. A rest or passing contact',
+             'is recorded but never offered for binding.']),
+            ('↵ done', 'ESC cancel'), ui.plural(len(events), 'event'))
 
         if select.select([fd], [], [], 0.05)[0]:
             for typ, num, val in _events(fd):
@@ -737,6 +667,425 @@ def observe_trigger(tui, fd, title):
                 if not answer:
                     got['rest'] = None
             return got
+
+
+def ask_one(tui, fd, run, ask, head, note='', wanted=None):
+    """One question on the screen. The answer, `ui.BACK`, or None to give up.
+
+    Every branch here is a widget; which one is `ask.how`, out of the
+    descriptor. What used to decide this was the shape of the surrounding
+    `if`, which is why editing needed a second copy of all of it.
+    """
+    width = tui.scr.getmaxyx()[1] - 8
+    trail = screens.trail_tree(run.trail(), width)
+    aside = screens.note_lines(ask)
+    title = f'{head} — {ask.says}'
+
+    if ask.how == 'collect':
+        drain(fd)
+        seen, held = collect_buttons(tui, fd, head, aside, wanted=wanted)
+        if seen is None:
+            return None
+        got = (seen, held)
+        return got if questions.answered(ask, got) else ui.BACK
+
+    if ask.how in ('pick', 'tick'):
+        picks = SHEET.choices(ask)
+        got = tui.menu(title, [c['says'] for c in picks],
+                       [list(c.get('hint') or []) + aside for c in picks],
+                       multi=(ask.how == 'tick'), under=trail, back=True,
+                       tail=note)
+        if got is None or got is ui.BACK:
+            return got
+        return ([picks[i]['name'] for i in got] if ask.how == 'tick'
+                else picks[got]['name'])
+
+    if ask.how == 'name':
+        return tui.ask(title, aside, _suggest(run))
+
+    if ask.how == 'press':
+        drain(fd)
+        return one_button(tui, fd, head, ask.says, aside)
+
+    if ask.how == 'watch':
+        drain(fd)
+        watch = observe_trigger if ask.id == 'pull' else observe_selector
+        return watch(tui, fd, head)
+
+    if ask.how == 'sort':
+        return press_in_order(tui, fd, run, head, aside)
+
+    raise ValueError(f'{ask.id}: no widget draws {ask.how!r}')
+
+
+def press_in_order(tui, fd, run, head, aside):
+    """Put a control's directions in the order its buttons are in.
+
+    The buttons were collected in whatever order you happened to press
+    them, and a hat's directions are only worth anything against the right
+    ones.
+    """
+    want = list(run.said.get('dirs') or [])
+    seen, _held = run.given['buttons']
+    picked = []
+    drain(fd)
+    for way in want[:len(seen)]:
+        b = one_button(tui, fd, head, f'press:  {way.upper()}',
+                       aside + [f'{len(picked)} of {len(want)} so far.'])
+        if b is None:
+            return ui.BACK
+        picked.append(b)
+    if sorted(picked) != sorted(seen[:len(picked)]):
+        tui.confirm('Different buttons',
+                    ['That was not the same set you pressed before, so the',
+                     'order is left as it was.'], [], default=True)
+        return list(seen)
+    return picked
+
+
+def _suggest(run):
+    """A name to start from, out of what the shape is called."""
+    entry = SHEET.choice(run.by_id['kind'], run.given.get('kind', ''))
+    return (entry['says'].split(' (')[0].title() if entry else '')
+
+
+def ask_reach(tui, fd, dev, prof):
+    """Reach, measured by reaching. True if the rig moved.
+
+    A list of the rounds rather than fifteen screens in a row, because a
+    row of steps says neither how far in you are nor which ones are worth
+    doing -- and most of them, on most devices, find nothing.
+    """
+    said = prof.entry(dev.slug)
+    if said is None:
+        return False
+    ask = SHEET.of(questions.DEVICE)[0]
+    levels = SHEET.vocabulary['level']
+    note = screens.note_lines(ask)
+    moved, at = False, 1
+    while True:
+        rounds = screens.reach_rounds(dev, prof, levels)
+        rows = screens.reach_rows(rounds)
+        done = sum(1 for r in rounds if r.done)
+        what, at = tui.browse(
+            f'Reach — {dev.product}', rows,
+            lambda n: screens.reach_side(dev, rounds, n, note),
+            keys=('↑↓ move', '↵ do this round', 'ESC done'),
+            right=f'{done} of {len(rounds)} rounds done',
+            index=at, aside='this round')
+        if what is None:
+            if done == len(rounds):
+                _rest_are_off(dev, said)
+                write_profile(prof)
+            return moved
+        one = screens._round_at(rounds, at)
+        if one is not None and _one_round(tui, fd, dev, prof, said, one):
+            moved = True
+
+
+def _one_round(tui, fd, dev, prof, said, one):
+    """Walk one round and write what it found. False if it was cancelled."""
+    drain(fd)
+    title, aside, says = screens.round_prompt(one)
+    seen, _held = collect_buttons(tui, fd, title, aside, says=says)
+    if seen is None:
+        return False
+    access = said.setdefault('access', {})
+    # This round's earlier answers go first: doing it again replaces what
+    # it said rather than adding to it.
+    for spots in access.values():
+        spots[:] = [sp for sp in spots
+                    if not (sp.get('level') == one.level['name']
+                            and sp.get('finger') == one.finger)]
+    for b in seen:
+        g = dev.group_of(b)
+        if g is not None and g.id:
+            access.setdefault(g.id, []).append(
+                {'part': _part_of(dev, one.level['name']),
+                 'level': one.level['name'], 'finger': one.finger})
+    walked = said.setdefault('rounds', [])
+    if [one.level['name'], one.finger] not in walked:
+        walked.append([one.level['name'], one.finger])
+    write_profile(prof)
+    return True
+
+
+def _rest_are_off(dev, said):
+    """Once every round is walked, what none of them reached is off it.
+
+    Only then. Half the rounds say nothing about a control except that it
+    has not come up yet, and writing that down as OFF would be recording
+    an answer nobody gave.
+    """
+    access = said.setdefault('access', {})
+    for g in dev.groups(bindable=True):
+        if g.id and not access.get(g.id):
+            access[g.id] = [{'part': 'panel', 'level': 'OFF'}]
+
+
+def reach_from(dev, pressed):
+    """What a set of rounds amounts to: {control id: [spot]}.
+
+    `pressed` is `[(level, finger, buttons)]`, one entry per round.
+
+    Whatever was never pressed comes out as OFF. That is not a gap in the
+    answers -- a control you did not reach from anywhere on the device is a
+    control you take your hand off for, and saying nothing about it would
+    leave it looking unmeasured instead.
+    """
+    got = {}
+    for level, finger, seen in pressed:
+        for b in seen:
+            g = dev.group_of(b)
+            if g is not None and g.id:
+                got.setdefault(g.id, []).append(
+                    {'part': _part_of(dev, level), 'level': level,
+                     'finger': finger})
+    for g in dev.groups(bindable=True):
+        if g.id and g.id not in got:
+            got[g.id] = [{'part': 'panel', 'level': 'OFF'}]
+    return got
+
+
+def _part_of(dev, level):
+    """Which part of the rig a hand is on at this level."""
+    return dev.kind if level in devicemap.GRIPPED else f'{dev.kind}_base'
+
+
+def ask_facts(tui, fd, dev):
+    """The five ergonomic facts, as a list rather than a menu. True if
+    anything moved.
+
+    Per question and not per control, for the same reason the reach rounds
+    are: these are comparative, and twenty-six controls times five
+    questions is a hundred and thirty screens nobody would finish.
+    """
+    asks = SHEET.of(questions.ALL)
+    moved, at = False, 0
+    while True:
+        rows = screens.fact_rows(dev, asks)
+        done = sum(1 for tone, _t in rows if tone == screens.TONE['measured'])
+        what, at = tui.browse(
+            f'Facts — {dev.product}', rows,
+            lambda n: screens.fact_side(dev, asks, n),
+            keys=('↑↓ move', '↵ answer this one', 'ESC done'),
+            right=f'{done} of {len(asks)} answered', index=at)
+        if what is None:
+            return moved
+        moved = ask_all(tui, fd, dev, asks[at]) or moved
+
+
+def ask_all(tui, fd, dev, ask):
+    """One question down every control at once. True if anything moved.
+
+    The hardware is in your hands, so it is the input: press a control on
+    the device and its answer changes. Twenty-six rows of arrow keys is
+    the same work with the device sitting there unused.
+    """
+    controls = [g for g in dev.groups(bindable=True) if g.id]
+    if not controls:
+        return False
+    picks = SHEET.choices(ask)
+    moved, at = False, 0
+
+    def poll():
+        nonlocal moved
+        if not select.select([fd], [], [], 0)[0]:
+            return None
+        for typ, num, val in _events(fd):
+            if typ & JS_EVENT_BUTTON and val:
+                g = dev.group_of(num)
+                if g is not None and g in controls:
+                    _step(dev, g, ask, picks)
+                    moved = True
+                    return controls.index(g)
+        return None
+
+    while True:
+        rows = screens.answer_rows(dev, ask, controls)
+        told = sum(1 for g in controls if g.told(ask.sets) == 'measured')
+        what, at = tui.browse(
+            screens.caption(ask), rows,
+            lambda n: screens.answer_side(dev, ask, controls, n),
+            keys=('press a control', 'SPACE answers', '↵ done'),
+            right=f'{told} of {len(controls)} answered',
+            index=at, takes=(' ',), poll=poll)
+        if what in (None, 'enter'):
+            return moved
+        if what == ' ':
+            _step(dev, controls[at], ask, picks)
+            moved = True
+
+
+def _step(dev, group, ask, picks):
+    """Move a control's answer on by one: off, on, off again.
+
+    One gesture for both shapes of question. A yes/no flips; one with
+    three steps walks round them, because pressing the thing twice to get
+    back where you were is how you undo a press you did not mean.
+    """
+    if not picks:
+        _set_fact(dev, group, ask.sets, not group.fact(ask.sets))
+        return
+    names = [c['name'] for c in picks]
+    now = group.fact(ask.sets)
+    at = names.index(now) if now in names else -1
+    _set_fact(dev, group, ask.sets, names[(at + 1) % len(names)])
+
+
+def _set_fact(dev, group, field, value):
+    """Record an ergonomic fact against a control, in the file and in hand."""
+    for raw in dev._raw['group']:
+        if raw.get('id') == group.id:
+            raw[field] = value
+    setattr(group, field, value)
+
+
+def walk_control(tui, fd, dev, group=None, wanted=None):
+    """Ask about one control, from nothing or from what it already says.
+
+    Returns the finished `Run`, or None if it was given up on. Editing is
+    this same walk with answers already in it, which is the whole reason
+    the order lives in a descriptor.
+    """
+    run = questions.Run(SHEET, given=_already(group) if group else None)
+    head = dev.product if group is None else f'{dev.product} — {group.label}'
+    at, note = None, ''
+    if run.done:
+        # Already answered for. Walking it again would ask nothing and hand
+        # back what it already had, so the useful thing is to let you say
+        # which of the answers was wrong.
+        at = _pick_from_trail(tui, run, group.label if group else '')
+        if at is None:
+            return None
+    while True:
+        ask = run.by_id[at] if at else run.next()
+        if ask is None:
+            return run
+        got = ask_one(tui, fd, run, ask, head, note, wanted)
+        note = ''
+        if got is None:
+            return None
+        if got is ui.BACK:
+            at = _before(run, ask)
+            continue
+        gone = run.revise(ask, got)
+        at = None
+        if gone:
+            # Said on the next question rather than in a box of its own: it
+            # is a consequence of what you just did, not an event.
+            note = screens.dropped_said(gone)
+
+
+def _pick_from_trail(tui, run, called):
+    """Which answer to change, for a control that has them all already."""
+    said = run.trail()
+    n = tui.choose(f'Edit {called}' if called else 'Edit control',
+                   screens.trail_tree(said, 56, lead=''),
+                   keys=('↑↓ move', '↵ change it', 'ESC back'))
+    return None if n is None else said[n][0].id
+
+
+def _before(run, ask):
+    """The question to step back into, or the one you are on if it is first."""
+    done = [i for i in run.order if i != ask.id]
+    return done[-1] if done else ask.id
+
+
+def _already(group):
+    """What a captured control has already answered.
+
+    Including the observations. A trigger's stored states ARE what watching
+    the pull produced -- stages, a rest contact, contacts that fire on the
+    way past -- so reading them back is the difference between opening a
+    described trigger and being made to pull it again.
+    """
+    seen = [st.button for st in group.states if st.button is not None]
+    said = {'buttons': (seen, set()), 'kind': group.kind}
+    if group.label:
+        said['name'] = group.label
+    if group.kind in questions.CLICKS:
+        # Recorded even when there is none: "it does not click" is an
+        # answer, and a control missing it is a control the walk thinks it
+        # has not finished asking about.
+        said['click'] = group.push
+    if group.kind == 'trigger':
+        said['pull'] = {'stages': list(group.buttons),
+                        'rest': group.contact('rest'),
+                        'transient': list(group.transient),
+                        'cumulative': bool(group.cumulative)}
+        if group.contact('rest') is not None:
+            said['returns'] = 'yes'
+    elif group.kind == 'selector':
+        said['sweep'] = {'order': list(group.buttons), 'exclusive': True,
+                         'names': list(group.names)}
+    elif group.names:
+        # A shape that knows its own directions needs no telling. One that
+        # does not -- a rocker could be any of three pairs -- has to have
+        # the answer read back out of what it was called, or the question
+        # never applies and the names go with it.
+        said['which_way'] = _which_way(group.names)
+        if not said['which_way']:
+            del said['which_way']
+        said['order'] = list(group.buttons)
+    return said
+
+
+def _which_way(names):
+    """The vocabulary entry whose directions are these, if there is one."""
+    return next((c['name'] for c in SHEET.vocabulary.get('axis', ())
+                 if list(c.get('dirs') or ()) == list(names)), '')
+
+
+def build_group(run, keep=None):
+    """A raw group dict out of what a run answered.
+
+    This is where `sets` in the descriptor becomes a field in the file. It
+    hands back the old shape and lets `devicemap.upgrade` make states of it,
+    so one place knows what a group looks like on disk.
+    """
+    said = run.given
+    seen, _held = said.get('buttons', ([], set()))
+    # The click is not one of the places you can put the control, and a
+    # dial or a mini-stick has nothing else: collecting picks it up with
+    # the rest, and leaving it here makes it its own position as well.
+    seen = [b for b in seen if b != said.get('click')]
+    entry = {'kind': said['kind'], 'buttons': list(said.get('order') or seen),
+             'label': said.get('name', ''), 'source': 'measured'}
+    dirs = run.said.get('dirs') or []
+    if dirs:
+        entry['dirs'] = list(dirs[:len(entry['buttons'])])
+    if said.get('click') is not None:
+        entry['push'] = said['click']
+    pull = said.get('pull')
+    if pull:
+        entry['buttons'] = list(pull['stages'])
+        entry['stages'] = ['first', 'second', 'third'][:len(pull['stages'])]
+        entry.pop('dirs', None)
+        if pull.get('cumulative'):
+            entry['cumulative'] = True
+        if pull.get('rest') is not None and said.get('returns') == 'yes':
+            entry['rest_contact'] = pull['rest']
+        if pull.get('transient'):
+            entry['transient'] = list(pull['transient'])
+    sweep = said.get('sweep')
+    if sweep:
+        entry['buttons'] = list(sweep['order'])
+        # A sweep does not name its own positions; a capture already on
+        # file does, and re-reading one must not rename what it found.
+        entry['positions'] = list(sweep.get('names') or [
+            f'position {n + 1}' for n in range(len(sweep['order']))])
+        entry.pop('dirs', None)
+    if keep is not None:
+        # A control keeps its name through a recapture, because a profile
+        # points at it by that name and the buttons are what moved. Its
+        # axes come along for the same reason: nothing here asked about
+        # them, so nothing here may drop them.
+        if keep.id:
+            entry['id'] = keep.id
+        if keep.axes:
+            entry['axes'] = list(keep.axes)
+    return devicemap.upgrade(entry)
 
 
 def capture_ministick(tui, dev, fd, click=None, first_axis=None,
@@ -792,26 +1141,14 @@ def capture_ministick(tui, dev, fd, click=None, first_axis=None,
             ax['travel'] = travel
     axes = slots
 
-    label = tui.text(f'{head} — name it',
+    label = tui.ask(f'{head} — name it',
                      ['What you would call it looking at the device.'],
                      'Dial' if kind == 'dial' else 'Mini-stick')
     if label is None:
         return False
-    ri = tui.menu(f'{head} — how do you reach it?', [r[0] for r in REACH],
-                  [r[1] for r in REACH], subtitle=label, index=0)
-    if ri is None:
-        return False
-    pre = [i for i, (v, _) in enumerate(SUITS_VOCAB)
-           if v in SUITS.get(kind, [])]
-    si = tui.menu(f'{head} — what kind of action belongs here?',
-                  [v for v, _ in SUITS_VOCAB], [h for _, h in SUITS_VOCAB],
-                  subtitle=label, multi=True, selected=pre)
-    if si is None:
-        return False
 
     entry = {'kind': kind, 'buttons': [], 'label': label,
-             'reach': REACH[ri][0], 'axes': axes,
-             'suits': [SUITS_VOCAB[i][0] for i in si], 'source': 'measured'}
+             'axes': axes, 'source': 'measured'}
     if click is not None:
         entry['push'] = click
     # replace anything that already claimed these axes or that button -- but
@@ -824,232 +1161,14 @@ def capture_ministick(tui, dev, fd, click=None, first_axis=None,
     raw['group'].append(entry)
     if click is not None:
         u = unknown_group(raw)
-        u['buttons'] = [b for b in u['buttons'] if b != click]
-        if not u['buttons']:
+        set_buttons(u, [b for b in buttons_of(u) if b != click])
+        if not buttons_of(u):
             raw['group'].remove(u)
     for i in axes:
         ax = next((x for x in raw.get('axis', []) if x['index'] == i), None)
         if ax is not None and ax.get('source') != 'measured':
             ax['source'] = 'measured'
             ax.pop('note', None)
-    return True
-
-
-def capture_button(tui, dev, fd):
-    """One physical control, from press to written entry.  Returns True if
-    anything changed."""
-    raw = dev._raw
-    head = f'{dev.product} — new control'
-    drain(fd)
-    seen, held = collect_buttons(tui, fd, head, [
-        'A hat: push every direction in turn, then RETURN.',
-        'A two-stage trigger: squeeze through both detents.',
-        'A switch that stays put: leave it in the position you mean.'])
-    if not seen:
-        return False
-
-    unknown = unknown_group(raw)
-    touched = [g for g in raw['group'] if g['kind'] != 'unknown'
-               and any(b in all_of(g) for b in seen)]
-    if touched:
-        lines = ['These buttons already belong to:', '']
-        for g in touched:
-            lines.append(f'   {g["kind"]:16s} {all_of(g)}  '
-                         f'{g.get("label", "")}   (source: {g.get("source")})')
-        lines += ['', f'You just pressed: {seen}']
-        measured = any(g.get('source') == 'measured' for g in touched)
-        lines += ['', 'Y -- replace it with what you just pressed',
-                  'N -- leave it alone and describe the rest']
-        warn = ['Most seeded grouping is inferred -- a guess from another game.',
-                'Replacing it with what your hand just did is the point.']
-        if measured:
-            warn = ['One of those was captured by hand, not guessed.',
-                    'A control that mechanically nudges another shows up in its',
-                    'trace -- that is what N is for. RETURN says N.']
-        replace = tui.confirm(head, lines, warn, default=not measured)
-        if replace is None:
-            return False
-        if replace:
-            freed = [b for g in touched for b in all_of(g)]
-            for g in touched:
-                raw['group'].remove(g)
-            back = sorted(set(freed) - set(seen))
-            if back:
-                unknown['buttons'] = sorted(set(unknown['buttons']) | set(back))
-        # answering N keeps them: the `stolen` check below drops those buttons
-        # from the new entry instead of taking them
-
-    ki = tui.menu(f'{head} — what is it?', [k[1] for k in KINDS],
-                  [k[3] for k in KINDS], subtitle=f'buttons: {seen}', index=5)
-    if ki is None:
-        return False
-    kind, _, dirnames, _ = KINDS[ki]
-
-    stays = ('switch2', 'switch3', 'latch', 'selector')
-    if kind in stays and not held:
-        if not tui.confirm(head,
-                           ['Nothing is closed right now.', '',
-                            f'A {kind} holds a contact in the position it is',
-                            'left in -- this one sprang back.', '',
-                            'Carry on anyway?'],
-                           ['A sprung two-way lever is a rocker, not a switch.'],
-                           default=False):
-            return False
-    if kind not in stays and held:
-        if not tui.confirm(head,
-                           [f'Button {sorted(held)} is still closed.', '',
-                            f'A {kind} is momentary -- nothing should be held',
-                            'once your hand is off it.', '',
-                            'Carry on anyway?'],
-                           ['Something that stays put is a switch, a latch or',
-                            'a selector.'], default=False):
-            return False
-
-    order, push, rest_contact, cumulative = list(seen), None, None, False
-    transient, dirs = [], []
-
-    if kind == 'hat2':
-        ways = [('up', 'down'), ('left', 'right'), ('forward', 'back')]
-        oi = tui.menu(f'{head} — which way does it move?',
-                      ['up and down', 'left and right', 'forward and back'],
-                      [['Vertical, the usual for a flap or trim lever.'],
-                       ['Across, like a thumb rocker on a throttle.'],
-                       ['Along the grip, away from you and back.']],
-                      subtitle=f'buttons: {seen}')
-        if oi is None:
-            return False
-        dirnames = list(ways[oi])
-    if kind == 'selector':
-        drain(fd)
-        got = observe_selector(tui, fd, head)
-        if got is None:
-            return False
-        order = got['order']
-        dirs = [str(i + 1) for i in range(len(order))]
-    if kind == 'trigger':
-        drain(fd)
-        got = observe_trigger(tui, fd, head)
-        if got is None:
-            return False
-        order, rest_contact = got['stages'], got['rest']
-        cumulative, transient = got['cumulative'], got['transient']
-    if kind in ('hat2', 'hat4', 'hat8', 'encoder', 'ministick', 'dial'):
-        push = one_button(tui, fd, head, 'does it also click? press the click in',
-                          ['A hat, an encoder and a mini-stick often press in.',
-                           'That click reports as one more button.',
-                           'RETURN skips if this one does not click.'])
-        if push is not None and push in order:
-            order.remove(push)
-
-    control_axes = []
-    if kind in ('ministick', 'dial'):
-        return capture_ministick(
-            tui, dev, fd, kind=kind, n_axes=1 if kind == 'dial' else 2,
-            click=push if push is not None
-            else (seen[0] if len(seen) == 1 else None))
-
-    expect = {'hat2': 2, 'hat4': 4, 'hat8': 8,
-              'switch2': 2, 'switch3': 3}.get(kind)
-    if kind in ('trigger', 'ministick', 'selector'):
-        expect = None
-    if expect and len(order) != expect:
-        if not tui.confirm(head,
-                           [f'{len(order)} directions for a {kind}, expected'
-                            f' {expect}.', '', f'directions: {order}',
-                            f'push: {push}' if push is not None else ''],
-                           ['Carry on only if you meant it.']):
-            return False
-
-    if kind == 'trigger':
-        dirs = dirnames[:len(order)]
-    if kind not in ('trigger', 'selector') and dirnames and len(order) > 1:
-        want = dirnames[:len(order)]
-        picked = []
-        for d in want:
-            b = one_button(tui, fd, head, f'press:  {d.upper()}',
-                           ['Directions are physical, from your seat:',
-                            'UP is away from you, toward the nose.',
-                            'RETURN keeps the order you first pressed them in.'])
-            if b is None:
-                picked = []
-                break
-            picked.append(b)
-        if picked and sorted(picked) == sorted(order):
-            order = picked
-        dirs = want
-
-    label = tui.text(f'{head} — name it',
-                     ['What you would call it looking at the device.',
-                      'Hat A, Trigger, Gear switch, Pinky button.'],
-                     {'hat4': 'Hat', 'hat8': 'Hat',
-                      'switch2': 'Two-position switch',
-                      'switch3': 'Three-position switch', 'trigger': 'Trigger',
-                      'hat2': 'Hat', 'paddle': 'Paddle'}.get(kind, 'Button'))
-    if label is None:
-        return False
-
-    ri = tui.menu(f'{head} — how do you reach it?', [r[0] for r in REACH],
-                  [r[1] for r in REACH], subtitle=label, index=len(REACH) - 1)
-    if ri is None:
-        return False
-
-    pre = [i for i, (v, _) in enumerate(SUITS_VOCAB) if v in SUITS.get(kind, [])]
-    si = tui.menu(f'{head} — what kind of action belongs here?',
-                  [v for v, _ in SUITS_VOCAB], [h for _, h in SUITS_VOCAB],
-                  subtitle=f'{label} — {REACH[ri][0]}', multi=True, selected=pre)
-    if si is None:
-        return False
-
-    # a control that mechanically nudges another one -- a trigger pushing past
-    # a lever -- shows the neighbour's buttons in its own trace. Leave them
-    # where they already are rather than quietly taking them.
-    owned = {}
-    for g in raw['group']:
-        if g['kind'] == 'unknown':
-            continue
-        for b in all_of(g):
-            owned[b] = g.get('label') or g['kind']
-    stolen = {b: owned[b] for b in list(order) + list(transient) if b in owned}
-    if stolen:
-        order = [b for b in order if b not in stolen]
-        transient = [b for b in transient if b not in stolen]
-        if rest_contact in stolen:
-            rest_contact = None
-        tui.confirm(head,
-                    ['These already belong to another control, so they stay'
-                     ' there:', ''] +
-                    [f'   button {b} -- {who}' for b, who in stolen.items()],
-                    ['A trigger that pushes past a lever sees the lever in its',
-                     'own trace. That does not make it part of the trigger.'],
-                    default=True)
-        if not order:
-            return False
-
-    entry = {'kind': kind, 'buttons': order, 'label': label,
-             'reach': REACH[ri][0],
-             'suits': [SUITS_VOCAB[i][0] for i in si], 'source': 'measured'}
-    if dirs:
-        key = {'trigger': 'stages', 'selector': 'positions'}.get(kind, 'dirs')
-        entry[key] = dirs
-    if push is not None:
-        entry['push'] = push
-    if rest_contact is not None:
-        entry['rest_contact'] = rest_contact
-    if cumulative:
-        entry['cumulative'] = True
-    if transient:
-        entry['transient'] = transient
-    if control_axes:
-        entry['axes'] = control_axes
-    raw['group'].append(entry)
-
-    done = set(order) | set(transient)
-    for extra in (push, rest_contact):
-        if extra is not None:
-            done.add(extra)
-    unknown['buttons'] = [b for b in unknown['buttons'] if b not in done]
-    if not unknown['buttons']:
-        raw['group'].remove(unknown)
     return True
 
 
@@ -1093,23 +1212,15 @@ def capture_axis(tui, dev, fd):
             return capture_ministick(tui, dev, fd, kind='dial', n_axes=1,
                                      first_axis=idx)
 
-    label = tui.text(f'{head} {idx} — name it',
+    label = tui.ask(f'{head} {idx} — name it',
                      ['What you would call it looking at the device.'],
                      existing.get('label', '') if existing else '')
     if label is None:
-        return False
-    pre = [i for i, (v, _) in enumerate(AXIS_SUITS)
-           if existing and v in existing.get('suits', [])]
-    si = tui.menu(f'{head} {idx} — what belongs on it?',
-                  [v for v, _ in AXIS_SUITS], [h for _, h in AXIS_SUITS],
-                  subtitle=label, multi=True, selected=pre)
-    if si is None:
         return False
     if existing is None:
         existing = {'index': idx}
         raw.setdefault('axis', []).append(existing)
     existing.update({'kind': AXIS_KINDS[ki][0], 'label': label,
-                     'suits': [AXIS_SUITS[i][0] for i in si],
                      'source': 'measured'})
     if travel:
         existing['travel'] = travel
@@ -1124,323 +1235,158 @@ def reset_grouping(raw, n_buttons):
     keep = [g for g in raw['group'] if g['kind'] == 'switch-position']
     raw['group'] = keep + [{'kind': 'unknown', 'label': 'Not yet captured',
                             'source': 'unknown',
-                            'buttons': sorted(set(range(n_buttons))
+                            'states': [{'button': b} for b in
+                                       sorted(set(range(n_buttons))
                                               - {b for g in keep
-                                                 for b in g['buttons']})}]
-
-
-def edit_axis(tui, dev, fd, ax):
-    """Change what an axis is taken to be, without having to move it."""
-    changed = False
-    while True:
-        facts = ' '.join(v for v in (ax.get('hid', ''), ax.get('rest', ''),
-                                     ax.get('travel', '')) if v)
-        descr = (f'axis {ax["index"]}  {facts}  '
-                 f'{ax.get("label") or "-"}   [{ax.get("source")}]')
-        fields = ['what it is', 'name', 'what belongs on it',
-                  're-measure it (move it)', 'clear it', 'done']
-        fhints = [['Mini-stick, lever, slider, dial, pedal...'],
-                  ['What you would call it looking at the device.'],
-                  ['Tick and untick with SPACE.'],
-                  ['Moving it again refreshes whether it sweeps or steps.'],
-                  ['Drops the interpretation. The measured facts -- HID kind,',
-                   'resting behaviour -- stay, because those were not guessed.'],
-                  ['Back to the device.']]
-        fi = tui.menu(f'{dev.product} — edit axis', fields, fhints,
-                      subtitle=descr, index=2)
-        if fi is None or fi == 5:
-            return changed
-
-        if fi == 0:
-            ki = tui.menu('What is it?', [k[1] for k in AXIS_KINDS],
-                          [k[2] for k in AXIS_KINDS], subtitle=descr,
-                          index=next((n for n, k in enumerate(AXIS_KINDS)
-                                      if k[0] == ax.get('kind')), 0))
-            if ki is not None:
-                ax['kind'] = AXIS_KINDS[ki][0]
-                ax['source'] = 'measured'
-                changed = True
-        elif fi == 1:
-            v = tui.text('Name it', ['What you would call it looking at the'
-                                     ' device.'], ax.get('label', ''))
-            if v is not None:
-                ax['label'] = v
-                ax['source'] = 'measured'
-                changed = True
-        elif fi == 2:
-            pre = [n for n, (v, _) in enumerate(AXIS_SUITS)
-                   if v in ax.get('suits', [])]
-            si = tui.menu('What belongs on it?', [v for v, _ in AXIS_SUITS],
-                          [h for _, h in AXIS_SUITS], subtitle=descr,
-                          multi=True, selected=pre)
-            if si is not None:
-                ax['suits'] = [AXIS_SUITS[n][0] for n in si]
-                ax['source'] = 'measured'
-                changed = True
-        elif fi == 3:
-            drain(fd)
-            got, travel = one_axis(tui, fd, f'{dev.product} — axis',
-                                   ['Move this one end to end.',
-                                    f'Expecting axis {ax["index"]}.'])
-            if got is None:
-                continue
-            if got != ax['index']:
-                tui.confirm('Different axis',
-                            [f'That was axis {got}, not {ax["index"]}.', '',
-                             'Nothing changed.'], [], default=True)
-                continue
-            if travel:
-                ax['travel'] = travel
-                changed = True
-        elif fi == 4:
-            if tui.confirm('Clear it',
-                           [descr, '', 'Drop what it is taken to be?'],
-                           ['The HID kind and resting behaviour stay.'],
-                           default=False):
-                for k in ('kind', 'label', 'suits', 'note'):
-                    ax.pop(k, None)
-                ax['source'] = 'unknown'
-                return True
-
-
-def edit_group(tui, dev, fd):
-    """Change a control that is already described, without pressing it again --
-    ticking the wrong thing in a list should not cost a whole capture pass."""
-    raw = dev._raw
-    groups = [g for g in raw['group'] if g['kind'] != 'unknown']
-    groups.sort(key=lambda g: min(g['buttons']) if g['buttons'] else 0)
-    axes = sorted(raw.get('axis', []), key=lambda a: a['index'])
-    if not groups and not axes:
-        return False
-    items = [f'{g["kind"]:16s} {str(all_of(g)):20s} {g.get("label", "")}'
-             for g in groups]
-    hints = [[f'reach: {g.get("reach", "-")}',
-              f'suits: {", ".join(g.get("suits", [])) or "-"}',
-              f'source: {g.get("source")}'] for g in groups]
-    for a in axes:
-        facts = ' '.join(v for v in (a.get('hid', ''), a.get('rest', ''),
-                                     a.get('travel', '')) if v)
-        items.append(f'{"axis " + str(a["index"]):16s} {facts:20s} '
-                     f'{a.get("label") or "-"}')
-        hints.append([f'suits: {", ".join(a.get("suits", [])) or "-"}',
-                      f'source: {a.get("source")}',
-                      'measured facts stay whatever you choose'])
-    i = tui.menu(f'{dev.product} — edit what?', items, hints)
-    if i is None:
-        return False
-    if i >= len(groups):
-        return edit_axis(tui, dev, fd, axes[i - len(groups)])
-    g = groups[i]
-    changed = False
-
-    while True:
-        def descr():
-            return (f'{g["kind"]}  {all_of(g)}  {g.get("label", "")}'
-                    f'   [{", ".join(g.get("suits", [])) or "nothing"}]')
-
-        fields = ['what it is', 'name', 'how you reach it',
-                  'what belongs on it', 're-press the directions',
-                  'delete it', 'done']
-        fhints = [['Change the shape. Direction names are cleared with it.'],
-                  ['What you would call it looking at the device.'],
-                  ['Decides whether it can hold a reflex action.'],
-                  ['Tick and untick with SPACE.'],
-                  ['Only for a hat, a trigger or a multi-position switch.'],
-                  ['The buttons go back to the unknown pile.'],
-                  ['Back to the device.']]
-        fi = tui.menu(f'{dev.product} — edit', fields, fhints,
-                      subtitle=descr(), index=3)
-        if fi is None or fi == 6:
-            return changed
-
-        if fi == 0:
-            ki = tui.menu('What is it?', [k[1] for k in KINDS],
-                          [k[3] for k in KINDS], subtitle=descr(),
-                          index=next((n for n, k in enumerate(KINDS)
-                                      if k[0] == g['kind']), 5))
-            if ki is not None and KINDS[ki][0] != g['kind']:
-                g['kind'] = KINDS[ki][0]
-                g.pop('dirs', None)
-                g.pop('stages', None)
-                changed = True
-
-        elif fi == 1:
-            v = tui.text('Name it', ['What you would call it looking at the'
-                                     ' device.'], g.get('label', ''))
-            if v is not None:
-                g['label'] = v
-                changed = True
-
-        elif fi == 2:
-            ri = tui.menu('How do you reach it?', [r[0] for r in REACH],
-                          [r[1] for r in REACH], subtitle=descr(),
-                          index=next((n for n, r in enumerate(REACH)
-                                      if r[0] == g.get('reach')), len(REACH) - 1))
-            if ri is not None:
-                g['reach'] = REACH[ri][0]
-                changed = True
-
-        elif fi == 3:
-            pre = [n for n, (v, _) in enumerate(SUITS_VOCAB)
-                   if v in g.get('suits', [])]
-            si = tui.menu('What kind of action belongs here?',
-                          [v for v, _ in SUITS_VOCAB],
-                          [h for _, h in SUITS_VOCAB], subtitle=descr(),
-                          multi=True, selected=pre)
-            if si is not None:
-                g['suits'] = [SUITS_VOCAB[n][0] for n in si]
-                changed = True
-
-        elif fi == 4:
-            dirnames = next((k[2] for k in KINDS if k[0] == g['kind']), [])
-            if not dirnames or len(g['buttons']) < 2:
-                tui.confirm('Nothing to re-press',
-                            [f'A {g["kind"]} has no directions to put in order.'],
-                            [], default=True)
-                continue
-            want = dirnames[:len(g['buttons'])]
-            picked = []
-            drain(fd)
-            for d in want:
-                b = one_button(tui, fd, f'{dev.product} — {g.get("label", "")}',
-                               f'press:  {d.upper()}',
-                               ['Directions are physical, from your seat:',
-                                'UP is away from you, toward the nose.',
-                                'RETURN gives up and keeps the current order.'])
-                if b is None:
-                    picked = []
-                    break
-                picked.append(b)
-            if picked and sorted(picked) == sorted(g['buttons']):
-                g['buttons'] = picked
-                g['stages' if g['kind'] == 'trigger' else 'dirs'] = want
-                changed = True
-
-        elif fi == 5:
-            if tui.confirm('Delete it',
-                           [descr(), '', 'Send these buttons back to unknown?'],
-                           ['You can capture them again straight away.'],
-                           default=False):
-                raw['group'].remove(g)
-                u = unknown_group(raw)
-                u['buttons'] = sorted(set(u['buttons']) | set(all_of(g)))
-                return True
+                                                 for b in all_of(g)})]}]
 
 
 def overview(tui, dev, js, probe=None):
+    """Every control on one device, and how far each has got.
+
+    The list IS the progress: what somebody answered for, what is standing
+    on what its shape usually is, and what nobody has placed yet. Pressing
+    RETURN on a row walks its questions, and that walk is the same one a
+    fresh capture takes -- there is no separate edit screen any more.
+    """
     fd = os.open(js, os.O_RDONLY | os.O_NONBLOCK)
-    dirty = False
+    dirty, sel = False, 0
     try:
         while True:
+            rows = screens.control_rows(dev)
             btns, axes = dev.unknown()
-            held = sorted(b for g in dev.groups('switch-position')
-                          for b in g.buttons)
-            lines = []
-            for g in dev.groups(bindable=True):
-                d = (f'  [{", ".join(g.dirs or g.stages)}]'
-                     if (g.dirs or g.stages) else '')
-                p = f' +push {g.push}' if g.push is not None else ''
-                x = f' +axes {g.axes}' if g.axes else ''
-                lines.append(f'  {g.kind:16s} {str(g.buttons):20s} '
-                             f'{g.label}{d}{p}{x}')
-            if dev.axes():
-                lines.append('')
-                for a in sorted(dev.axes(), key=lambda a: a.index):
-                    owner = dev.axis_group(a.index)
-                    own = f'  ({owner.label})' if owner else ''
-                    mark = '' if a.source == 'measured' else f'  [{a.source}]'
-                    lines.append(f'  axis {a.index:<4}{a.hid:<8}{a.rest:<9}'
-                                 f'{a.travel:<9}{a.label or "-"}{own}{mark}')
-            unwired = sorted(b for g in dev.groups('unwired')
-                             for b in g.buttons)
-            if unwired:
-                lines.append(f'  nothing behind these: {unwired}')
-            if btns:
-                lines += ['', f'  still unknown: {btns}']
-            if held:
-                lines.append(f'  held at rest, leave alone: {held}')
+            left = sum(1 for r in rows if r.tone != 'measured')
+            got = tui.choose(
+                dev.product, [(r.tone, r.text) for r in rows],
+                index=min(sel, max(0, len(rows) - 1)), full=True,
+                keys=screens.sill_keys(), takes=screens.takes(),
+                poll=_watch(dev, fd, rows), corner='pressed',
+                right=f'{len(rows) - left}/{len(rows)} done · '
+                      f'{dev.n_axes - len(axes)}/{dev.n_axes} axes'
+                      + (' · unsaved' if dirty else ''),
+                tail='? help')
 
-            h = tui.scr.getmaxyx()[0]
-            tui.scr.erase()
-            for i, ln in enumerate(lines[:max(0, h - 8)]):
-                tui._put(3 + i, 0, ln)
-            tui._chrome(
-                dev.product,
-                f'{dev.n_buttons - len(btns)}/{dev.n_buttons} buttons described,'
-                f' {dev.n_axes - len(axes)}/{dev.n_axes} axes'
-                + ('    * unsaved' if dirty else ''),
-                [], '',
-                'RETURN = capture, E = edit, A = an axis, U = unwired, '
-                'S = save, Q = quit')
-            tui.scr.refresh()
-
-            k = tui.key(0.5)
-            if k in ('q', 'Q', 'esc'):
+            if got is None or got in ('q', 'Q'):
                 return dirty
-            if k in ('s', 'S'):
+            if got == '?':
+                tui.popup('help', screens.key_help())
+                continue
+            if got in ('s', 'S'):
                 if probe:
                     dev._raw['fingerprint'] = {
-                        key: probe[key] for key in
-                        ('buttons', 'axes', 'axmap', 'hid') if key in probe}
+                        k: probe[k] for k in ('buttons', 'axes', 'axmap', 'hid')
+                        if k in probe}
                 write_device(dev)
                 dirty = False
-            elif k == 'enter':
-                if capture_button(tui, dev, fd):
-                    reconcile(dev._raw, dev.n_buttons)
-                    dev.__init__(dev._raw, dev.path)   # refresh the query views
-                    dirty = True
-            elif k in ('u', 'U'):
-                left, _ = dev.unknown()
-                if left and tui.confirm(
-                        f'{dev.product} — nothing behind them?',
-                        [f'{len(left)} buttons are still unknown:', '',
-                         f'   {left}', '',
-                         'Record them as reported but not wired to anything?'],
-                        ['The firmware allocates a fixed number of buttons, so'
-                         ' some',
-                         'indices have nothing physical behind them. This says'
-                         ' you',
-                         'looked -- which is not the same as not having looked'
-                         ' yet.'],
-                        default=False):
-                    raw = dev._raw
-                    raw['group'] = [g for g in raw['group']
-                                    if g['kind'] != 'unknown']
-                    raw['group'].append({
-                        'kind': 'unwired', 'buttons': left,
-                        'label': 'Reported by the firmware, nothing attached',
-                        'source': 'measured'})
-                    reconcile(dev._raw, dev.n_buttons)
-                    dev.__init__(dev._raw, dev.path)
-                    dirty = True
-            elif k in ('e', 'E'):
-                if edit_group(tui, dev, fd):
-                    reconcile(dev._raw, dev.n_buttons)
-                    dev.__init__(dev._raw, dev.path)
-                    dirty = True
-            elif k in ('a', 'A'):
-                if capture_axis(tui, dev, fd):
-                    reconcile(dev._raw, dev.n_buttons)
-                    dev.__init__(dev._raw, dev.path)
-                    dirty = True
+            elif got in ('r', 'R'):
+                prof = devicemap.profile()
+                if prof is None:
+                    tui.confirm('No rig on file',
+                                ['Reach is a fact about the desk, so it has',
+                                 'nowhere to go without one.'], [],
+                                default=True)
+                elif ask_reach(tui, fd, dev, prof):
+                    _reload(dev)
+            elif got in ('f', 'F'):
+                dirty = ask_facts(tui, fd, dev) or dirty
+            elif got in ('a', 'A'):
+                dirty = capture_axis(tui, dev, fd) or dirty
+                _reload(dev)
+            elif got in ('u', 'U'):
+                dirty = _mark_unwired(tui, dev, btns) or dirty
+                _reload(dev)
+            elif got in ('n', 'N') or isinstance(got, int):
+                sel = got if isinstance(got, int) else sel
+                row = rows[got] if isinstance(got, int) else None
+                old = row.group if row is not None else None
+                if old is not None and not old.bindable:
+                    continue
+                run = walk_control(tui, fd, dev, old,
+                                   row.button if row is not None else None)
+                if run is None or not run.done:
+                    continue
+                if not _replace(dev, old, build_group(run, old)):
+                    continue
+                _reload(dev)
+                dirty = True
     finally:
         os.close(fd)
 
 
+def _watch(dev, fd, rows):
+    """Watch the hardware while the list is up: what was that button?
+
+    The list answers "which button is this row". This answers the same
+    question from the other end, which is the one you actually have -- a
+    piece of plastic under your thumb and no idea what it is called.
+    """
+    def poll():
+        if not select.select([fd], [], [], 0)[0]:
+            return None
+        for typ, num, val in _events(fd):
+            if typ & JS_EVENT_BUTTON and val:
+                return (screens.row_of(rows, dev, num),
+                        screens.what_is(dev, num))
+        return None
+    return poll
+
+
+def _reload(dev):
+    """Re-derive the typed view after the raw one moved under it."""
+    reconcile(dev._raw, dev.n_buttons)
+    dev.__init__(dev._raw, dev.path)
+    dev.under(devicemap.profile())
+
+
+def _replace(dev, old, entry):
+    """Put a described control in, and take out whatever it displaced.
+
+    False when the entry owns nothing at all: no buttons, no contacts, no
+    axes. Nothing downstream can do anything with one, and it sits in the
+    list as a row with no name and no way to give it one.
+    """
+    if not all_of(entry) and not entry.get('axes'):
+        return False
+    raw = dev._raw
+    claimed = set(all_of(entry))
+    # Noted before anything is taken out, because the thing being looked
+    # for is exactly the thing about to go.
+    where = next((n for n, g in enumerate(raw['group'])
+                  if entry.get('id') and g.get('id') == entry.get('id')),
+                 None)
+    for g in list(raw['group']):
+        if g is not entry and (claimed & set(all_of(g))
+                               or (entry.get('id')
+                                   and g.get('id') == entry.get('id'))):
+            if g['kind'] == 'unknown':
+                set_buttons(g, [b for b in buttons_of(g) if b not in claimed])
+            else:
+                raw['group'].remove(g)
+    # Back where it was rather than at the end: the file is sorted on the
+    # way out, but the list you are looking at is not, and a control that
+    # jumps to the bottom when you describe it loses your place.
+    raw['group'].insert(len(raw['group']) if where is None
+                        else min(where, len(raw['group'])), entry)
+    return True
+
+
+def _mark_unwired(tui, dev, btns):
+    """Say that the firmware reports these and nothing is behind them."""
+    if not btns:
+        return False
+    if not tui.confirm('Nothing behind them',
+                       [f'Mark {btns} as reported but not wired?'],
+                       ['They stop being offered as free buttons.'],
+                       default=False):
+        return False
+    dev._raw['group'].append(devicemap.upgrade(
+        {'kind': 'unwired', 'buttons': list(btns), 'source': 'measured',
+         'label': 'Reported by the firmware, nothing attached'}))
+    return True
+
+
 def tui_main(scr, found):
-    curses.curs_set(0)
-    scr.nodelay(True)
-    scr.keypad(True)
-    try:
-        curses.set_escdelay(50)
-    except AttributeError:
-        pass
-    try:
-        curses.start_color()
-        curses.use_default_colors()
-    except curses.error:
-        pass
-    tui = Tui(scr)
+    tui = ui.setup(scr)
 
     while True:
         if len(found) == 1:
@@ -1570,8 +1516,9 @@ def main():
                      if (g.dirs or g.stages) else '')
                 p = f' +push {g.push}' if g.push is not None else ''
                 x = f' +axes {g.axes}' if g.axes else ''
+                t = f'  tier {g.tier}' if g.tier is not None else ''
                 print(f'      {g.kind:16s} {str(g.buttons):22s} '
-                      f'{g.label}{d}{p}{x}')
+                      f'{g.label}{d}{p}{x}{t}')
             if btns:
                 print(f'      {"unknown":16s} {btns}')
         return

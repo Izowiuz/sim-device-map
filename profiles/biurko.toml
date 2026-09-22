@@ -1,0 +1,75 @@
+# The desk: which captured devices are on it, and how they sit.
+#
+# A capture says what a control IS. This says where it ended up, which is a
+# fact about the desk rather than about the hardware -- the same throttle on
+# a chair rail has a different reach and can be under a different hand. That
+# is why `reach` could not stay in the capture file, and why `hand` sat there
+# doing nothing until there was somewhere better to put it.
+#
+# `access` is a list because most controls can be reached more than one way,
+# and the nearest way is the one that decides how far a control is.
+#
+# The OFF spots below read `how = "guessed"`. The captures said only "needs
+# letting go", which covers both reaching down to the device base and taking
+# a hand off it entirely. OFF is the careful reading of the two: a pass with
+# the wizard can move one closer, and moving closer is the safe direction.
+
+name = "Biurko"
+
+[[device]]
+slug = "virpil-vmax-prime-throttle"
+role = "throttle"
+hand = "left"
+
+[device.access]
+apu-button           = [{ part = "panel", level = "OFF", how = "guessed" }]
+big-red-button       = [{ part = "panel", level = "OFF", how = "guessed" }]
+bottom-thumb-button  = [{ part = "throttle", level = "HOME", finger = "thumb" }]
+e1-encoder           = [{ part = "panel", level = "OFF", how = "guessed" }]
+e2-encoder           = [{ part = "panel", level = "OFF", how = "guessed" }]
+keyboard-b1-button   = [{ part = "panel", level = "OFF", how = "guessed" }]
+keyboard-b2-button   = [{ part = "panel", level = "OFF", how = "guessed" }]
+keyboard-b3-button   = [{ part = "panel", level = "OFF", how = "guessed" }]
+keyboard-b4-button   = [{ part = "panel", level = "OFF", how = "guessed" }]
+keyboard-b5-button   = [{ part = "panel", level = "OFF", how = "guessed" }]
+keyboard-b6-button   = [{ part = "panel", level = "OFF", how = "guessed" }]
+left-side-dial       = [{ part = "panel", level = "OFF", how = "guessed" }]
+middle-finger-button = [
+    { part = "throttle", level = "EXTENDED", finger = "middle" },
+    { part = "throttle", level = "EXTENDED", finger = "ring" },
+]
+middle-finger-hat    = [
+    { part = "throttle", level = "EXTENDED", finger = "middle" },
+    { part = "throttle", level = "EXTENDED", finger = "ring" },
+]
+mode-selector        = [{ part = "panel", level = "OFF", how = "guessed" }]
+pinky-button         = [{ part = "throttle", level = "EXTENDED", finger = "pinky" }]
+right-side-dial      = [{ part = "panel", level = "OFF", how = "guessed" }]
+t1-rocker            = [{ part = "panel", level = "OFF", how = "guessed" }]
+t2-rocker            = [{ part = "panel", level = "OFF", how = "guessed" }]
+t3-rocker            = [{ part = "panel", level = "OFF", how = "guessed" }]
+t4-rocker            = [{ part = "panel", level = "OFF", how = "guessed" }]
+t5-rocker            = [{ part = "panel", level = "OFF", how = "guessed" }]
+thumb-button         = [{ part = "throttle", level = "HOME", finger = "thumb" }]
+thumb-hat            = [{ part = "throttle", level = "HOME", finger = "thumb" }]
+thumb-mini-stick     = [{ part = "throttle", level = "HOME", finger = "thumb" }]
+thumb-two-way-hat    = [{ part = "throttle", level = "HOME", finger = "thumb" }]
+
+[[device]]
+slug = "virpil-vpc-stick-warbrd-d"
+role = "stick"
+hand = "right"
+leaving_home_releases_flight = true
+
+[device.access]
+analogue-brake-lever-on-the-grip = [{ part = "stick", level = "EXTENDED", finger = "pinky" }]
+bottom-thumb-hat                 = [{ part = "stick", level = "HOME", finger = "thumb" }]
+grip-pinky-button                = [{ part = "panel", level = "OFF", how = "guessed" }]
+grip-thumb-hat                   = [{ part = "stick", level = "HOME", finger = "thumb" }]
+main-trigger                     = [{ part = "stick", level = "HOME", finger = "index" }]
+mini-stick                       = [{ part = "stick", level = "HOME", finger = "thumb" }]
+stick-encoder-and-click          = [{ part = "stick", level = "HOME", finger = "thumb" }]
+thumb-bottom-button              = [{ part = "stick", level = "HOME", finger = "thumb" }]
+thumb-top-button                 = [{ part = "stick", level = "HOME", finger = "thumb" }]
+top-thumb-hat                    = [{ part = "stick", level = "HOME", finger = "thumb" }]
+trigger-initial-lever            = [{ part = "stick", level = "HOME", finger = "index" }]

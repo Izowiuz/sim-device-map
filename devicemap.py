@@ -4,7 +4,7 @@
     import devicemap
     dev = devicemap.by_usb('3344:43e8')
     dev.groups('hat4')            # every four-way hat, in press order
-    dev.axes(suits='view')        # axes that suit head-look
+    dev.axes(kind='lever')        # every lever, in index order
     dev.unknown()                 # what still needs capturing
 
 Matching is deliberately two-layered, because VIRPIL's own configuration tool
@@ -26,6 +26,7 @@ than no match at all.
 
 import glob
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 
@@ -34,17 +35,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 #: so the `slug` inside does not have to repeat it and a second brand of pedals
 #: does not land in the same pile.
 CAPTURES = os.path.join(HERE, 'captures')
+PROFILES = os.path.join(HERE, 'profiles')
 
 #: How well a connected device lines up with its file.
 EXACT = 'exact'                 # identity and fingerprint both agree
 DRIFT = 'identity-drift'        # same identity, different shape: data suspect
 RECONFIGURED = 'reconfigured'   # same shape, new identity: probably the VPC tool
 UNKNOWN = 'unknown'             # nothing in the map looks like it
-
-#: `source` values, weakest last.  Consumers should treat anything below
-#: "measured" as a hypothesis that a capture pass can overturn.
-TRUST = ('measured', 'inferred', 'unknown')
-
 
 @dataclass
 class Axis:
@@ -55,7 +52,11 @@ class Axis:
     travel: str = ''        # analog | stepped -- a hat wired to an axis steps
     kind: str = ''
     label: str = ''
-    suits: list = field(default_factory=list)
+    #: How fine this axis actually is: the span it reports end to end, and
+    #: how much it wanders while untouched. Both wait on a measurement --
+    #: an axis with a noisy centre is not a place to put a trim.
+    range: int | None = None
+    noise: int | None = None
     #: other axis indices that move when this one does, AS THE HARDWARE IS SET
     #: UP NOW. An axis is not free just because nothing is bound to it: War
     #: Thunder's pitch trim went on the VMAX's right throttle lever because the
@@ -96,40 +97,272 @@ class Axis:
         return self.rest == 'min'
 
 
+#: Where the hand has to be, nearest to flying first. HOME is the normal
+#: grip with every finger where it lives; EXTENDED keeps the grip and
+#: stretches a finger; BASE takes the hand off the grip onto the device;
+#: OFF takes it off the device altogether.
+LEVELS = ('HOME', 'EXTENDED', 'BASE', 'OFF')
+
+#: Where on the rig a hand can be. A position is a part and a level.
+PARTS = ('stick', 'stick_base', 'throttle', 'throttle_base', 'panel')
+
+FINGERS = ('thumb', 'index', 'middle', 'ring', 'pinky')
+
+#: Which way a position points, from the pilot's seat. Closed, because a
+#: rule that has to accept "forward" from one capture and "up" from another
+#: is a rule written about spelling.
+DIRECTIONS = ('up', 'down', 'left', 'right', 'fwd', 'aft', 'cw', 'ccw')
+
+#: Levels that leave the hand in the grip. EXTENDED is not a posture of its
+#: own -- the hand has not moved, one finger has -- so a thumb at HOME and a
+#: pinky reaching are the same hand in the same place, doing two things.
+#: BASE and OFF do move the hand, and then nothing else is happening.
+GRIPPED = ('HOME', 'EXTENDED')
+
+
+@dataclass
+class Spot:
+    """Somewhere a control can be reached from, and with what.
+
+    A control has a list of these, because most can be reached more than one
+    way and the cheapest way is what decides how far it is. `how` says
+    whether anybody measured it.
+    """
+    part: str = ''
+    level: str = 'HOME'
+    finger: str = ''
+    how: str = 'measured'
+    #: Filled in from the device this spot belongs to, never written in the
+    #: profile: which hand is on a device is said once, per device.
+    hand: str = ''
+
+    @property
+    def tier(self):
+        """How far from flying this spot is. 0 is the normal grip."""
+        return LEVELS.index(self.level) if self.level in LEVELS else len(LEVELS)
+
+
+#: What a position is for, beyond being somewhere to put the control. Empty
+#: means it is exactly that -- a hat direction, a trigger detent, a switch
+#: end. The rest are contacts the control carries without being places you
+#: can leave it.
+ROLES = ('push', 'rest', 'travel', 'transient')
+
+#: How a contact answers when asked which way its button points. These words
+#: reach a screen in the wizard that reads this map, so they are the wording
+#: itself rather than a description of it.
+ROLE_SAID = {
+    'push': 'push',
+    'rest': 'rest contact (inverted)',
+    'travel': 'travel contact (held while the lever is used)',
+    'transient': 'transient (fires both ways)',
+}
+
+#: Controls that stay where you put them. The game sees the button HELD, not
+#: pressed, so what sits there is on for as long as the handle is over.
+LATCHING = ('switch2', 'switch3', 'latch', 'selector')
+
+
+@dataclass
+class State:
+    """One position a control can be in, or one contact it carries.
+
+    `button` is None where a position closes nothing. The centre of an
+    ON-OFF-(ON) switch is a real place to leave the handle and the game never
+    hears about it, so `emits_signal` records a fact about the switch rather
+    than a gap in the capture.
+    """
+    name: str = ''
+    button: int | None = None
+    direction: str = ''      # canonical, where the position points somewhere
+    role: str = ''           # one of ROLES; empty means it is a position
+    latching: bool = False   # stays here when you let go
+    emits_signal: bool = True
+
+
+#: What a control of each shape is taken to be until somebody answers for
+#: it. Every one of these is a guess about a class of thing, not a
+#: measurement of a particular one, and `Group.told` says so. The wizard
+#: fills them in; until it does they are better than nothing and honest
+#: about being worse than an answer.
+#:
+#: `hold_ok` is whether it is comfortable held down for a long time, so
+#: anything sprung says no. `rapid_ok` is repeated clicking, so anything
+#: heavy or detented says no. `modifier_ok` is whether it can carry a shift
+#: layer, which wants something held without thinking about it.
+DEFAULTS = {
+    'button':    dict(hold_ok=True,  rapid_ok=True,  modifier_ok=True,
+                      blind_distinct='low',  accident_risk='low'),
+    'paddle':    dict(hold_ok=True,  rapid_ok=False, modifier_ok=True,
+                      blind_distinct='high', accident_risk='low'),
+    'hat2':      dict(hold_ok=False, rapid_ok=True,  modifier_ok=False,
+                      blind_distinct='high', accident_risk='low'),
+    'hat4':      dict(hold_ok=False, rapid_ok=True,  modifier_ok=False,
+                      blind_distinct='high', accident_risk='low'),
+    'hat8':      dict(hold_ok=False, rapid_ok=True,  modifier_ok=False,
+                      blind_distinct='high', accident_risk='low'),
+    'trigger':   dict(hold_ok=True,  rapid_ok=False, modifier_ok=False,
+                      blind_distinct='high', accident_risk='high'),
+    'latch':     dict(hold_ok=True,  rapid_ok=False, modifier_ok=True,
+                      blind_distinct='high', accident_risk='med'),
+    'switch2':   dict(hold_ok=True,  rapid_ok=False, modifier_ok=True,
+                      blind_distinct='low',  accident_risk='med'),
+    'switch3':   dict(hold_ok=True,  rapid_ok=False, modifier_ok=True,
+                      blind_distinct='low',  accident_risk='med'),
+    'selector':  dict(hold_ok=True,  rapid_ok=False, modifier_ok=True,
+                      blind_distinct='high', accident_risk='low'),
+    'encoder':   dict(hold_ok=False, rapid_ok=True,  modifier_ok=False,
+                      blind_distinct='high', accident_risk='low'),
+    'dial':      dict(hold_ok=False, rapid_ok=False, modifier_ok=False,
+                      blind_distinct='high', accident_risk='low'),
+    'ministick': dict(hold_ok=False, rapid_ok=False, modifier_ok=False,
+                      blind_distinct='high', accident_risk='low'),
+    'lever':     dict(hold_ok=True,  rapid_ok=False, modifier_ok=False,
+                      blind_distinct='high', accident_risk='low'),
+}
+
+#: The ones with no answer at all: nothing is bound to them, so nothing asks.
+NO_FACTS = dict(hold_ok=False, rapid_ok=False, modifier_ok=False,
+                blind_distinct='none', accident_risk='low')
+
+
+@dataclass(frozen=True)
+class Shape:
+    """What a control is, as numbers and flags rather than as a word.
+
+    This is what `kind` was standing in for. The wizard downstream decoded
+    `hat4`, `switch3` and `trigger` with three tables of strings to get at
+    exactly these, and a table of strings is a rule about spelling.
+    """
+    positions: int      # places you can put it, not counting its contacts
+    latching: bool      # it stays where you leave it
+    directional: bool   # its positions point somewhere
+    clicks: bool        # it presses in as well
+    stepped: bool       # a deeper position keeps the shallower one held
+    axes: int           # axes that belong to it
+
+
 @dataclass
 class Group:
     kind: str               # hat4 hat8 trigger switch2 switch3 button paddle
-    #: ordered: hats by dirs, triggers by stages. A group need not have any --
-    #: a lever is an axis plus, sometimes, a contact.
-    buttons: list = field(default_factory=list)
+    #: Stable within a device, so a profile can name a control without naming
+    #: the buttons it happens to sit on today.
+    id: str = ''
+    #: Everywhere the control goes and every contact it carries, in press
+    #: order. A group need not have any -- a lever is an axis plus,
+    #: sometimes, a contact.
+    states: list = field(default_factory=list)
     label: str = ''
-    dirs: list = field(default_factory=list)
-    stages: list = field(default_factory=list)
-    positions: list = field(default_factory=list)  # a latch: one per position
-    push: int = None        # a hat that also clicks
     cumulative: bool = False  # a deeper stage keeps the shallower ones held
-    rest_contact: int = None  # closed while the control is UNTOUCHED
-    transient: list = field(default_factory=list)  # pulses DURING the travel
-    travel_contact: int = None  # closed for almost ALL of a lever's travel
     axes: list = field(default_factory=list)  # axes belonging to this control
-    reach: str = ''
     rest: str = ''
-    suits: list = field(default_factory=list)
     note: str = ''
     source: str = 'unknown'
+    #: Ergonomic facts. None and '' mean nobody answered, which is why they
+    #: are not stored with the default already in them: a file that writes
+    #: down its own guesses cannot tell you afterwards which ones they were.
+    hold_ok: bool | None = None
+    rapid_ok: bool | None = None
+    modifier_ok: bool | None = None
+    blind_distinct: str = ''
+    accident_risk: str = ''
+    #: Filled in from the rig, never from the capture: where a control sits
+    #: depends on the desk it is bolted to, not on the hardware. Empty until
+    #: a profile is laid over the device.
+    access: list = field(default_factory=list)
+
+    def __post_init__(self):
+        self.states = [s if isinstance(s, State) else State(**s)
+                       for s in self.states]
+        self.access = [a if isinstance(a, Spot) else Spot(**a)
+                       for a in self.access]
+
+    def fact(self, name):
+        """One ergonomic fact, from the file or from the shape it has.
+
+        Asked for by name rather than read as an attribute, because the
+        fallback is the whole point and an attribute would hide it.
+        """
+        got = getattr(self, name)
+        if got is not None and got != '':
+            return got
+        table = DEFAULTS.get(self.kind, {}) if self.bindable else NO_FACTS
+        return table.get(name, NO_FACTS[name])
+
+    def told(self, name):
+        """Whether somebody answered for this fact, or its shape did."""
+        got = getattr(self, name)
+        return 'measured' if got is not None and got != '' else 'guessed'
+
+    @property
+    def shape(self):
+        """What this control is, without the word for it."""
+        places = self.places
+        return Shape(positions=len(places),
+                     latching=any(p.latching for p in places),
+                     directional=any(p.direction for p in places),
+                     clicks=self.push is not None,
+                     stepped=bool(self.cumulative),
+                     axes=len(self.axes))
+
+    @property
+    def tier(self):
+        """How far from flying this control is, or None if nobody said.
+
+        The nearest way of reaching it wins: something you can get with a
+        thumb without moving is close even when you could also get it from
+        the base.
+        """
+        return min((a.tier for a in self.access), default=None)
+
+    @property
+    def places(self):
+        """The states that are somewhere to put it, in press order."""
+        return [s for s in self.states if not s.role]
+
+    def contact(self, role):
+        """The button of the one contact with this role, or None."""
+        return next((s.button for s in self.states if s.role == role), None)
+
+    @property
+    def buttons(self):
+        """Position buttons, in press order."""
+        return [s.button for s in self.places if s.button is not None]
+
+    @property
+    def push(self):
+        """The click a hat, dial or mini-stick also has."""
+        return self.contact('push')
+
+    @property
+    def names(self):
+        """What each position is called, or nothing where none are named.
+
+        A plain button has one position and no word for it. Handing back a
+        list of empty strings makes it look like a control with named
+        positions to anything that only asks whether the list is empty.
+        """
+        said = [s.name for s in self.places]
+        return said if any(said) else []
+
+    #: One list under three names. A reader asks for whichever it thinks the
+    #: control has and gets the same answer -- the split into dirs, stages
+    #: and positions was never a fact about the hardware, only about which
+    #: shape the person capturing it had in mind.
+    dirs = names
+    stages = names
+    positions = names
+
+    @property
+    def transient(self):
+        """Contacts that fire on the way past, so again on the way back."""
+        return [s.button for s in self.states
+                if s.role == 'transient' and s.button is not None]
 
     @property
     def all_buttons(self):
         """Every button this control owns, bindable or not."""
-        out = list(self.buttons)
-        if self.push is not None:
-            out.append(self.push)
-        if self.rest_contact is not None:
-            out.append(self.rest_contact)
-        if self.travel_contact is not None:
-            out.append(self.travel_contact)
-        out.extend(self.transient)
-        return out
+        return [s.button for s in self.states if s.button is not None]
 
     @property
     def bindable_buttons(self):
@@ -146,12 +379,10 @@ class Group:
         here and listed in `all_buttons`, so coverage still adds up and a
         consumer that wants one must ask for it.
         """
-        if self.kind in ('unknown', 'switch-position', 'unwired'):
+        if not self.bindable:
             return []
-        out = list(self.buttons)
-        if self.push is not None:
-            out.append(self.push)
-        return out
+        return [s.button for s in self.states
+                if s.button is not None and s.role in ('', 'push')]
 
     @property
     def bindable(self):
@@ -161,19 +392,102 @@ class Group:
 
     def direction(self, button):
         """Which way this button points, for a hat or a staged trigger."""
-        if self.push is not None and button == self.push:
-            return 'push'
-        if self.rest_contact is not None and button == self.rest_contact:
-            return 'rest contact (inverted)'
-        if self.travel_contact is not None and button == self.travel_contact:
-            return 'travel contact (held while the lever is used)'
-        if button in self.transient:
-            return 'transient (fires both ways)'
-        names = self.dirs or self.stages or self.positions
-        if not names or button not in self.buttons:
-            return ''
-        i = self.buttons.index(button)
-        return names[i] if i < len(names) else ''
+        for s in self.states:
+            if s.button is not None and s.button == button:
+                return ROLE_SAID[s.role] if s.role else s.name
+        return ''
+
+
+def slug(text):
+    """`Top thumb hat` -> `top-thumb-hat`."""
+    return re.sub(r'[^a-z0-9]+', '-', (text or '').lower()).strip('-')
+
+
+def name_ids(groups):
+    """Fill in the `id` of every described group that has none, in place.
+
+    Built from the label, because that is what somebody reading a profile
+    recognises: `[device.access."top-thumb-hat"]` says where it is, and a
+    counter would not. Where two controls share a label the lowest button
+    tells them apart rather than a running number, so capturing a third does
+    not renumber the first two.
+
+    The uncaptured bucket is left alone. It is scratch -- it appears and
+    empties as the capture goes on -- and a profile has nothing to say about
+    buttons nobody has described yet.
+    """
+    taken = {g['id'] for g in groups if g.get('id')}
+    for g in groups:
+        if g.get('id') or g.get('kind') == 'unknown':
+            continue
+        base = slug(g.get('label', '')) or g.get('kind', 'control')
+        owned = [st['button'] for st in g.get('states') or []
+                 if st.get('button') is not None]
+        name = base
+        if name in taken and owned:
+            name = f'{base}-{min(owned)}'
+        n = 2
+        while name in taken:
+            name, n = f'{base}-{n}', n + 1
+        g['id'] = name
+        taken.add(name)
+    return groups
+
+
+#: Fields a capture used to carry that say nothing about the hardware.
+#: `reach` was a sentence about the desk, so it moved to the profile; `suits`
+#: was an opinion about what a control is FOR, which is the solver's to have
+#: and not the map's.
+DROPPED = ('reach', 'suits')
+
+
+def upgrade_axis(a):
+    """An axis dict in the shape this module reads now."""
+    return {k: v for k, v in a.items() if k not in DROPPED}
+
+
+def upgrade(g):
+    """A group dict in the shape this module reads now.
+
+    Idempotent, so a file part-way through the migration loads as well as
+    either end of it, and the capture flows can go on building the old shape
+    until they are rewritten.
+
+    Order is the old `all_buttons` order -- positions, click, rest, travel,
+    passing contacts -- because that is what a consumer walking the list
+    already sees.
+    """
+    if 'kind' not in g:
+        return g
+    if 'states' in g:
+        return ({k: v for k, v in g.items() if k not in DROPPED}
+                if any(k in g for k in DROPPED) else g)
+    out = dict(g)
+    dirs = list(g.get('dirs') or [])
+    named = dirs or list(g.get('stages') or g.get('positions') or [])
+    latching = g['kind'] in LATCHING
+    states = []
+    for n, b in enumerate(g.get('buttons') or []):
+        name = named[n] if n < len(named) else ''
+        # Only what is not the default: a state carrying every field it
+        # could have is unreadable, and a default written down is a default
+        # somebody has to keep in step by hand.
+        states.append({'button': b}
+                      | ({'name': name, 'direction': name} if dirs
+                         else {'name': name} if name else {})
+                      | ({'latching': True} if latching else {}))
+    for role, key in (('push', 'push'), ('rest', 'rest_contact'),
+                      ('travel', 'travel_contact')):
+        if g.get(key) is not None:
+            states.append({'name': role, 'button': g[key], 'role': role}
+                          | ({'latching': True} if role != 'push' else {}))
+    for b in g.get('transient') or []:
+        states.append({'name': 'passing', 'button': b, 'role': 'transient'})
+    for dead in ('buttons', 'dirs', 'stages', 'positions', 'push',
+                 'rest_contact', 'travel_contact', 'transient') + DROPPED:
+        out.pop(dead, None)
+    out['states'] = states
+    return out
 
 
 class Device:
@@ -185,7 +499,6 @@ class Device:
         self.product = d['product']
         self.vendor = d.get('vendor', '')
         self.kind = d.get('kind', '')
-        self.hand = d.get('hand', '')
         self.n_buttons = d.get('buttons', 0)
         self.n_axes = d.get('axes', 0)
         ident = data.get('identity', {})
@@ -198,17 +511,39 @@ class Device:
         self.evdev_name = first.get('evdev', '')
         self.game_ids = first.get('games', {})
         self.fingerprint = data.get('fingerprint', {})
-        self._axes = [Axis(**a) for a in data.get('axis', [])]
-        self._groups = [Group(**g) for g in data.get('group', [])]
+        data['axis'] = [upgrade_axis(a) for a in data.get('axis', [])]
+        self._axes = [Axis(**a) for a in data['axis']]
+        # Upgraded in place, so there is one shape in memory whatever the
+        # file on disk still says.
+        data['group'] = [upgrade(g) for g in data.get('group', [])]
+        self._groups = [Group(**g) for g in data['group']]
+
+    def under(self, prof):
+        """Lay a rig over this device: which hand, and what reaches what.
+
+        Returns self, because every caller wants the device back and a
+        device without a rig is only half an answer.
+        """
+        said = prof.entry(self.slug) if prof is not None else None
+        self.profile = prof
+        self.hand = (said or {}).get('hand', '')
+        self.role = (said or {}).get('role') or self.kind
+        self.releases_flight = bool(
+            (said or {}).get('leaving_home_releases_flight'))
+        for g in self._groups:
+            g.access = (prof.access(self.slug, g.id)
+                        if prof is not None and said is not None and g.id
+                        else [])
+            for spot in g.access:
+                spot.hand = self.hand
+        return self
 
     # ---- queries ----
 
-    def axes(self, kind=None, suits=None, source=None):
+    def axes(self, kind=None, source=None):
         out = self._axes
         if kind:
             out = [a for a in out if a.kind == kind]
-        if suits:
-            out = [a for a in out if suits in a.suits]
         if source:
             out = [a for a in out if a.source == source]
         return out
@@ -221,12 +556,10 @@ class Device:
         mini-stick is two axes and a click, not three unrelated things."""
         return next((g for g in self._groups if index in g.axes), None)
 
-    def groups(self, kind=None, suits=None, bindable=None):
+    def groups(self, kind=None, bindable=None):
         out = self._groups
         if kind:
             out = [g for g in out if g.kind == kind]
-        if suits:
-            out = [g for g in out if suits in g.suits]
         if bindable is not None:
             out = [g for g in out if g.bindable == bindable]
         return out
@@ -297,22 +630,129 @@ class Device:
 
 # ---- loading ----
 
-def manufacturer_dir(vendor):
-    """Where a device from this maker belongs."""
-    slug = ''.join(c if c.isalnum() else '-' for c in vendor.lower()).strip('-')
-    return os.path.join(CAPTURES, slug or 'unknown')
+
+class Profile:
+    """One rig: which captured devices are on the desk, and how they sit.
+
+    A capture says what a control IS. A profile says where it ended up. The
+    same throttle on a desk and on a chair rail has a different reach and can
+    be under a different hand, so none of that belongs in the capture -- and
+    `hand` sat in the device file doing nothing for exactly that reason.
+
+    It is also what gives "different hands" a scope. Whether two controls can
+    be worked at once is a question about a pair of devices, and a pile of
+    capture files is not a pair of anything.
+    """
+
+    def __init__(self, data, path):
+        self.path = path
+        self.name = (data.get('name')
+                     or os.path.basename(path).removesuffix('.toml'))
+        self.devices = [dict(d) for d in data.get('device', [])]
+
+    def entry(self, slug):
+        """What this rig says about one captured device, or None."""
+        return next((d for d in self.devices if d.get('slug') == slug), None)
+
+    def access(self, slug, control):
+        """Every way of reaching one control, as this rig has it."""
+        got = (self.entry(slug) or {}).get('access') or {}
+        return [Spot(**a) for a in got.get(control, [])]
+
+    def _as_dict(self):
+        """This rig as the tables it was parsed from."""
+        return {'name': self.name, 'device': [dict(d) for d in self.devices]}
+
+    def __repr__(self):
+        return f'<Profile {self.name}: {len(self.devices)} devices>'
 
 
-def load_all():
+def compatible(a, b):
+    """Can these two controls be worked at the same time?
+
+    Different hands and there is nothing to argue about. One hand and it
+    comes down to whether there is anywhere that hand can be that reaches
+    both, with a different finger for each -- a thumb cannot be on two
+    things at once, however close together they are.
+
+    Derived rather than recorded, which is why a profile had to exist: this
+    is a question about a pair of devices, and a directory of capture files
+    is not a pair of anything. A 39-by-39 table would also have to be filled
+    in by hand, and would go stale the moment the rig moved.
+    """
+    for x in a.access:
+        for y in b.access:
+            if x.hand and y.hand and x.hand != y.hand:
+                return True
+            if _one_hand_at_both(x, y):
+                return True
+    return False
+
+
+def _one_hand_at_both(x, y):
+    """Can a single hand be at both of these spots at once?"""
+    if x.part != y.part:
+        return False                    # a hand is on one thing at a time
+    if not (x.finger and y.finger and x.finger != y.finger):
+        return False                    # nor is a finger in two places
+    if x.level in GRIPPED and y.level in GRIPPED:
+        return True
+    return x.level == y.level
+
+
+def load_profiles():
+    """Every rig on file, by name."""
+    out = []
+    for path in sorted(glob.glob(os.path.join(PROFILES, '*.toml'))):
+        with open(path, 'rb') as fh:
+            out.append(Profile(tomllib.load(fh), path))
+    return out
+
+
+def profile(name=None):
+    """The rig to read devices under, or None when there are none on file.
+
+    One profile and it is the one. More than one and the name has to come
+    from somewhere -- the argument, `SIM_DEVICE_PROFILE`, or whoever is
+    asking. Nothing here guesses which desk you are sitting at: guessing is
+    how the wizard that reads this map ended up with two override channels
+    and a silent fallback to whichever device loaded last.
+    """
+    have = load_profiles()
+    want = name or os.environ.get('SIM_DEVICE_PROFILE')
+    if want:
+        hit = next((p for p in have if p.name == want), None)
+        if hit is None:
+            raise SystemExit(f'no profile called {want!r}'
+                             + ('; have ' + ', '.join(p.name for p in have)
+                                if have else '; none on file'))
+        return hit
+    if len(have) == 1:
+        return have[0]
+    if not have:
+        return None
+    raise SystemExit('more than one profile, so which desk this is for cannot '
+                     'be decided here.\n  choose with SIM_DEVICE_PROFILE='
+                     + '|'.join(p.name for p in have))
+
+
+def load_all(bare=False):
+    """Every captured device, under the active rig.
+
+    `bare=True` reads the captures with no rig over them, which is what the
+    capture tool wants: it is describing the hardware, not the desk.
+    """
+    prof = None if bare else profile()
+    return [d.under(prof) for d in _load_captures()]
+
+
+def _load_captures():
     out = []
     for p in sorted(glob.glob(os.path.join(CAPTURES, '*', '*.toml'))):
         with open(p, 'rb') as f:
             out.append(Device(tomllib.load(f), p))
     return out
 
-
-def by_slug(slug):
-    return next((d for d in load_all() if d.slug == slug), None)
 
 
 def by_usb(usb, serial=None):
@@ -482,4 +922,5 @@ if __name__ == '__main__':
             d = f'  [{", ".join(g.dirs or g.stages)}]' if (g.dirs or g.stages) else ''
             p = f' +push {g.push}' if g.push is not None else ''
             x = f' +axes {g.axes}' if g.axes else ''
-            print(f'      {g.kind:16s} {str(g.buttons):22s} {g.label}{d}{p}{x}')
+            t = f'  tier {g.tier}' if g.tier is not None else ''
+            print(f'      {g.kind:16s} {str(g.buttons):22s} {g.label}{d}{p}{x}{t}')

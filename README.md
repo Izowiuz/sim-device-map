@@ -38,18 +38,29 @@ position rather than a momentary button, and that is detectable — see
 
 ## What a device file gives a wizard
 
-The grouping is the payload, because sensible defaults fall out of it:
+Facts, and only facts. What a control is good *for* is a judgement about a
+game's actions, and it is made by whatever is choosing bindings -- never
+here. The map used to carry it, in a `suits` field, and 39 controls produced
+24 different answers: an opinion filed in the facts, matched by string.
 
-| physical shape | what it wants |
+What is on offer instead is what the control physically does:
+
+| fact | what it settles |
 |---|---|
-| 4-way hat | four related directional actions (views, trim, sensor) |
-| 2-position switch | one *toggle* action on **both** ends — every flip changes state |
-| 3-position switch | a stepped pair (flaps up/down), centre left empty |
-| multi-stage trigger | fire groups in escalating order |
-| self-centring mini-stick | a pair of aim/view/cue axes |
-| lever resting at minimum | an absolute axis where zero means off (brakes, zoom) |
-| dial | trim, prop pitch, zoom |
-| paddle | a reflex action (countermeasures) |
+| `states` | every position it has, whether each one latches, and whether it sends anything |
+| `direction` | which way a position points, from the pilot's seat |
+| `cumulative` | a deeper trigger detent keeps the shallower one held |
+| `axes`, `rest`, `travel` | whether an axis centres, parks at zero, sweeps or steps |
+| `moves_with`, `coupling` | that two axes travel together as the rig is set up now |
+| `access` (in the profile) | where your hand has to be, and which finger |
+| `hold_ok`, `rapid_ok`, `modifier_ok` | comfortable held down, clicked fast, used as a shift |
+| `blind_distinct`, `accident_risk` | how easily found without looking, how easily hit by mistake |
+
+The last two rows are ergonomics, and they are the one place a file may say
+nothing. A control with no answer falls back to what its shape usually is
+(`Group.fact`), and `Group.told` says which of the two you got. **A guess is
+never written down**: a file that records its own guesses cannot say
+afterwards which ones they were.
 | button held at rest | **nothing** — it would fire continuously |
 
 ## Schema
@@ -69,16 +80,22 @@ The directory carries the manufacturer, so the `slug` inside the file is the
 only name code uses and nothing has to be renamed when a second brand arrives.
 
 ```toml
-[device]                # slug, product, vendor, kind, hand, buttons, axes
+[device]                # slug, product, vendor, kind, buttons, axes
                         # kind: stick | throttle | pedals | panel | wheel
 [[identity]]            # usb, serial, evdev name, first_seen, per-game ids
 [fingerprint]           # buttons, axes, axmap, hid usages
-[[axis]]                # index, evdev, hid, rest, kind, label, suits, source
-[[group]]               # kind, buttons, dirs/stages, push, label, reach, suits, source
+[[axis]]                # index, evdev, hid, rest, travel, kind, label, source
+[[group]]               # kind, id, states, cumulative, axes, label, source
 ```
 
-A hat that also clicks keeps its four directions in `buttons` and the click in
-`push`, so the direction names never drift out of step with the button list.
+A control's positions and the contacts it carries are one list. A hat that
+clicks has five states -- four directions and the click, marked
+`role = "push"` -- so a name can never drift out of step with the button it
+belongs to, which is what two parallel lists let it do.
+
+`id` is the control's name inside its device (`top-thumb-hat`), and it is
+what a profile points at. Buttons get renumbered by a firmware reflash; the
+name does not.
 
 A control is not always only buttons or only axes. A mini-stick is two axes
 and usually a click, and recording those as three unrelated things loses the
@@ -131,29 +148,106 @@ where you put it until you push it back. So `capture.py` asks, and on "no, I
 push it back" the button leaves the trigger and is captured as `kind = "latch"`
 on its own.
 
-A latch is worth having: the game sees the button **held**, not pressed, so it
-suits a state that is on while the lever is over -- master arm, a modifier, a
-cover that gates something -- which is what the `state` entry in `suits` is
-for.
+A latch is worth having, and the file says so without an opinion: its states
+are marked `latching = true`, so the game sees the button **held** rather
+than pressed. What that is good for -- master arm, a modifier, a cover that
+gates something -- follows from the fact, and is worked out by whatever is
+choosing bindings.
 
-### What `suits` means
+## What the wizard asks
 
-The bridge between a physical shape and a game's actions: what kind of thing
-this control is good for, so a wizard can choose what to put on it.
+The order and the branching live in `questions.toml`, not in the code that
+draws the screens. What they replace is a 215-line function of nested
+`if kind ==`, with a second, parallel copy of the same menus for editing --
+so editing is now the same walk with answers already in it.
 
-Buttons: `reflex` (hit without thinking, no regrip) · `fire` ·
-`fire-escalating` · `release` · `lock` · `sensor` · `view` · `trim` ·
-`toggle` (flip and leave) · `stepped-pair` · `occasional` (you can afford to
-look for it) · `guarded` (must not be hit by accident).
+```toml
+[[ask]]
+id   = "click"
+of   = "control"
+how  = "press"
+only = "can_click"
+says = "Does it also click? Press the click in."
+sets = "push"
+```
 
-Axes: `flight-roll` · `flight-pitch` · `flight-yaw` · `throttle` ·
-`collective` · `brake` · `view` · `cue` · `aim` · `zoom` · `trim` ·
-`prop-pitch` · `sweep` · `radiator`.
+`only` names a rule in `questions.py`, never an expression written as text:
+a name that does not exist is an error at load, where a bad expression would
+be a question that silently never fires.
 
-`reflex` and `occasional` are the two that carry the most weight, and they come
-straight from `reach`: a control the pinky reaches without regripping can hold
-countermeasures; one that needs letting go of the stick cannot, however
-convenient it looks on a diagram.
+`of` is what a question is asked ABOUT, and it decides the shape of the
+screen rather than just its words:
+
+| `of` | shape | why |
+|---|---|---|
+| `control` | one at a time, each answer a box you can step back into | you learn what a thing is by pressing it |
+| `device` | a round over the whole device | reach is not a fact about one control |
+| `all` | one list down every control | these are comparative judgements, and side by side they calibrate each other |
+
+Going back keeps what still applies. Saying a control is a hat8 rather than a
+hat4 does not cost you its name; only the answers whose question no longer
+applies are dropped, and the screen is told how many went.
+
+## The profile: where it all ended up
+
+A capture says what a control **is**. Where it sits is a fact about the desk,
+not the hardware: the same throttle on a chair rail has a different reach and
+can be under a different hand. That lives in `profiles/<name>.toml`.
+
+```toml
+name = "Biurko"
+
+[[device]]
+slug = "virpil-vpc-stick-warbrd-d"
+role = "stick"
+hand = "right"
+leaving_home_releases_flight = true   # in-flight actions stay at HOME
+
+[device.access]
+top-thumb-hat = [{ part = "stick", level = "HOME", finger = "thumb" }]
+```
+
+`access` is a **list**, because most controls can be reached more than one
+way, and the nearest way is the one that decides how far a control is.
+
+| level | where the hand is |
+|---|---|
+| `HOME` | the normal grip, every finger where it lives |
+| `EXTENDED` | still gripping, a finger stretches |
+| `BASE` | off the grip, onto the device |
+| `OFF` | off the device altogether |
+
+Two things fall out of `access` and are never written down.
+
+**`Group.tier`** is the lowest level any spot needs: the nearest way of
+reaching a control, because the awkward way it can *also* be reached says
+nothing about how fast it is.
+
+**`devicemap.compatible(a, b)`** is whether two controls can be worked at
+once. Different hands and there is nothing to argue about; one hand and it
+comes down to whether that hand can be somewhere that reaches both, with a
+different finger for each. `EXTENDED` is not a posture of its own -- the hand
+has not moved, one finger has -- so a thumb on one control and a pinky
+reaching for another is one hand doing two things. `BASE` and `OFF` do move
+the hand, and then nothing else is happening.
+
+That second question is why a profile exists at all: it is about a *pair* of
+devices, and a directory of capture files is not a pair of anything. The
+alternative is a 39-by-39 table filled in by hand, going stale the moment the
+rig moves.
+
+With more than one profile on file, say which with `SIM_DEVICE_PROFILE`.
+Nothing guesses which desk you are sitting at.
+
+`access` is measured rather than described. `r` in the wizard walks one
+round per posture and finger -- *with the thumb, from the normal grip, press
+everything you can reach* -- and whatever is never pressed comes out as
+`OFF`. Asking control by control would be asking the same question
+thirty-nine times, and the answers would not agree with each other.
+
+The ergonomic facts go the other way: `f` puts one question down **every**
+control at once, because "more distinct than that one" is a comparison and
+comparisons made on separate screens do not line up.
 
 ### Which way is "up"
 
@@ -256,11 +350,16 @@ control at a time.
 import devicemap
 dev = devicemap.by_usb('3344:43e8')
 dev.groups('hat4')              # every 4-way hat, in press order
-dev.axes(suits='view')          # axes that suit head-look
+dev.axes(kind='lever')          # every lever, in index order
 dev.unknown()                   # what still needs capturing
 
 g = dev.axis_group(5)           # the control an axis belongs to
 g.bindable_buttons              # excludes rest, travel and transient contacts
+g.tier                          # how far from flying, once a profile is on
+g.shape                         # positions, latching, directional, clicks...
+g.fact('hold_ok')               # the file's answer, or what the shape says
+g.told('hold_ok')               # 'measured' or 'guessed'
+devicemap.compatible(g, other)  # can both be worked at once
 dev.axis(2).independent         # False when another axis moves with it
 ```
 

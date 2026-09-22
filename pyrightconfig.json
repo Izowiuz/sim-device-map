@@ -1,0 +1,30 @@
+{
+  "include": [
+    "capture.py",
+    "devicemap.py",
+    "probe.py",
+    "tests"
+  ],
+  "exclude": [
+    "**/__pycache__"
+  ],
+  "pythonVersion": "3.13",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "standard",
+  "reportMissingModuleSource": "none",
+  "executionEnvironments": [
+    {
+      "root": "tests",
+      "extraPaths": [
+        ".",
+        ".."
+      ]
+    },
+    {
+      "root": ".",
+      "extraPaths": [
+        "."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,697 @@
+"""What the wizard's screens say, read back as strings.
+
+The screens are two things: what they say, which is here, and the curses
+calls that put it on a terminal, which are not. Only the first has anything
+to get wrong.
+
+The trail of boxes is most of this file. It is the part of the wizard that
+was not there at all before -- the old flow could not go back, it could only
+start over -- and a trail that silently stops at four boxes has lost three.
+"""
+
+import re
+import unittest
+
+import devicemap
+import fake
+import questions as q
+import screens
+import tui
+import tui as ui
+
+
+def run_through(**answers):
+    """A finished run over one control."""
+    sheet = q.read()
+    run = q.Run(sheet)
+    while (ask := run.next()):
+        run.answer(ask, answers[ask.id])
+    return run
+
+
+HAT2 = dict(buttons=([10, 12, 9], set()), kind='hat2', which_way='fwd_aft',
+            click=9, order=[10, 12], name='Thumb rocker')
+BUTTON = dict(buttons=([6], set()), kind='button', name='Pinky')
+
+
+class TheTrailOfAnswers(unittest.TestCase):
+    """A row of boxes was the first shape this took and it was the wrong
+    one: an answer is a name and a value, which reads down a column."""
+
+    def trail(self, answers, width=56):
+        return screens.trail_tree(run_through(**answers).trail(), width)
+
+    def test_nothing_answered_draws_nothing(self):
+        self.assertEqual([], screens.trail_tree([], 56))
+
+    def test_every_answer_is_there(self):
+        got = '\n'.join(t for _tone, t in self.trail(HAT2))
+        for shown in ('two-way hat', 'Thumb rocker', 'forward and back'):
+            with self.subTest(shown=shown):
+                self.assertIn(shown[:20], got)
+
+    def test_the_last_one_closes_the_tree(self):
+        got = [t for _tone, t in self.trail(HAT2)]
+        self.assertIn(tui.LAST, got[-1])
+        self.assertEqual(1, sum(1 for t in got if tui.LAST in t))
+
+    def test_the_names_line_up(self):
+        # A column, or it is a list of sentences with glyphs in front.
+        said = [t for _tone, t in self.trail(HAT2)
+                if tui.BRANCH in t or tui.LAST in t]
+        hits = [re.match(r'\s*[\u251c\u2514] .+?\s\s+(\S)', t) for t in said]
+        self.assertTrue(all(hits), said)
+        self.assertEqual(1, len({m.start(1) for m in hits if m}), said)
+
+    def test_a_long_answer_is_cut_and_not_wrapped(self):
+        # A tree that wraps stops being a tree: the second half of a line
+        # lands under the glyph instead of beside it.
+        got = self.trail(HAT2, 40)
+        self.assertTrue(all(len(t) <= 40 for _tone, t in got), got)
+
+    def test_without_a_heading_it_hangs_off_nothing(self):
+        # A branch indented under a line that is not there is a branch off
+        # the frame.
+        said = screens.trail_tree(run_through(**BUTTON).trail(), 56, lead='')
+        self.assertTrue(all(t.startswith((tui.BRANCH, tui.LAST))
+                            for _tone, t in said), said)
+
+    def test_with_a_heading_it_hangs_under_it(self):
+        said = [t for _tone, t in self.trail(BUTTON)]
+        self.assertIn('answered so far', said)
+        branches = [t for t in said if tui.BRANCH in t or tui.LAST in t]
+        self.assertTrue(all(t.startswith('  ') for t in branches), branches)
+
+    def test_it_says_what_it_is(self):
+        got = [t for _tone, t in self.trail(BUTTON)]
+        self.assertIn('answered so far', got)
+
+    def test_the_names_are_the_captions(self):
+        got = '\n'.join(t for _tone, t in self.trail(BUTTON))
+        self.assertIn('button IDs', got)
+
+
+class HowFarAControlHasGot(unittest.TestCase):
+    """The list is the progress indicator, so the three states it can show
+    are the only thing it is really for."""
+
+    def dev(self, access=True, label='Top hat', **facts):
+        g = fake.group('hat4', [1, 2, 3, 4], label=label, id='top-hat',
+                       **facts)
+        dev = fake.device(groups=[g], slug='rig-a')
+        said = {'top-hat': [{'part': 'stick', 'level': 'HOME',
+                             'finger': 'thumb'}]} if access else {}
+        prof = devicemap.Profile(
+            {'device': [{'slug': 'rig-a', 'hand': 'right', 'access': said}]},
+            '<fake>')
+        return dev.under(prof)
+
+    def rows(self, **kw):
+        return screens.control_rows(self.dev(**kw))
+
+    def test_nobody_has_placed_it(self):
+        row = self.rows(access=False)[0]
+        self.assertEqual('unset', row.tone)
+        self.assertIn('no reach', row.text)
+
+    def test_placed_but_standing_on_its_shape(self):
+        row = self.rows()[0]
+        self.assertEqual('guessed', row.tone)
+        self.assertIn('5 facts to go', row.text)
+
+    def test_answered_for(self):
+        row = self.rows(hold_ok=True, rapid_ok=True,
+                                   modifier_ok=False, blind_distinct='high',
+                                   accident_risk='low')[0]
+        self.assertEqual('measured', row.tone)
+        self.assertNotIn('to go', row.text)
+
+    def test_one_answer_short_is_not_finished(self):
+        row = self.rows(hold_ok=True, rapid_ok=True,
+                                    modifier_ok=False,
+                                    blind_distinct='high')[0]
+        self.assertEqual('guessed', row.tone)
+
+    def test_a_control_with_no_name_does_not_borrow_its_kind(self):
+        # `button` where a name should be is indistinguishable from a
+        # control somebody called `button`, and the row reads as finished.
+        dev = fake.device(groups=[fake.group('button', [5], label='',
+                                             id='button-5')])
+        row = screens.control_rows(dev.under(None))[0]
+        self.assertIn('js 5', row.text)
+        self.assertIn('a name', row.text)
+        self.assertEqual('unset', row.tone)
+
+    def test_a_button_nobody_described_gets_a_row_of_its_own(self):
+        # As one pile it was a single row, and that row did nothing: the
+        # natural gesture -- cursor on what is missing, RETURN -- was the
+        # one that was dead.
+        dev = fake.device(groups=[fake.group('unknown', [6, 7, 8],
+                                             label='Not yet captured')])
+        rows = screens.control_rows(dev.under(None))
+        self.assertEqual([6, 7, 8], [r.button for r in rows])
+        for row in rows:
+            with self.subTest(row=row.text):
+                self.assertIn('not described yet', row.text)
+                self.assertNotIn('position', row.text)
+                self.assertNotIn('tier', row.text)
+
+    def test_a_loose_button_says_which_one_it_is(self):
+        dev = fake.device(groups=[fake.group('unknown', [19])])
+        row = screens.control_rows(dev.under(None))[0]
+        self.assertIn('js 19', row.text)
+        self.assertEqual(19, row.button)
+        self.assertIsNone(row.group)
+
+    def test_placed_but_unnamed_is_still_unfinished(self):
+        # Reach is not the only thing a control needs. One you measured and
+        # never named reads as done if the name is not checked for.
+        row = self.rows(label='')[0]
+        self.assertEqual('unset', row.tone)
+        self.assertIn('a name', row.text)
+
+    def test_a_row_does_not_say_the_same_thing_twice(self):
+        dev = fake.device(groups=[fake.group('button', [5], label='Pinky',
+                                             id='pinky')])
+        row = screens.control_rows(dev.under(None))[0]
+        self.assertEqual(1, row.text.count('reach'), row.text)
+
+    def test_each_state_has_its_own_mark(self):
+        self.assertEqual(3, len(set(screens.MARK.values())))
+        self.assertEqual(set(screens.MARK), set(screens.TONE))
+
+    def test_a_row_that_is_not_a_control_says_which_it_is(self):
+        for kind in screens.NOT_A_CONTROL:
+            if kind == 'unknown':
+                continue            # a row each, not one row: see above
+            dev = fake.device(groups=[fake.group(kind, [1, 2], label='',
+                                                 id=kind)])
+            row = screens.control_rows(dev.under(None))[0]
+            with self.subTest(kind=kind):
+                self.assertIn(screens.NOT_A_CONTROL[kind][0], row.text)
+                self.assertIn('js 1, 2', row.text)
+                # Not a control, so neither of the columns that are about
+                # controls: it has no positions and nothing reaches it.
+                self.assertIn('2 buttons', row.text)
+                self.assertNotIn('position', row.text)
+                self.assertNotIn('tier', row.text)
+                self.assertNotIn('reach', row.text)
+
+    def test_a_control_with_nothing_behind_it_is_asked_nothing(self):
+        dev = fake.device(groups=[fake.group('unwired', [1, 2],
+                                             label='Nothing', id='none')])
+        row = screens.control_rows(dev.under(None))[0]
+        self.assertEqual('unset', row.tone)
+        self.assertNotIn('to go', row.text)
+
+
+class TheRealRig(unittest.TestCase):
+    def test_every_control_gets_a_row(self):
+        for dev in devicemap.load_all():
+            rows = screens.control_rows(dev)
+            with self.subTest(dev=dev.slug):
+                self.assertEqual(len(dev.groups()), len(rows))
+
+    def test_the_devices_say_what_is_outstanding(self):
+        prof = devicemap.profile()
+        rows = screens.device_rows(prof, devicemap.load_all())
+        self.assertTrue(rows)
+        for _tone, text, dev in rows:
+            with self.subTest(dev=dev.slug):
+                self.assertIn(dev.role, text)
+
+    def test_the_rig_on_file_is_listed(self):
+        rows = screens.profile_rows(devicemap.load_profiles())
+        self.assertTrue(rows)
+        self.assertIn('device', rows[0][1])
+
+
+class ANoteUnderAQuestion(unittest.TestCase):
+    """A note in the descriptor is wrapped wherever the TOML happened to
+    end a line. Honouring those breaks folds it twice -- at the file's
+    width and again at the box's -- and it comes out shredded."""
+
+    def test_a_paragraph_comes_back_as_one_line(self):
+        ask = q.Ask(id='x', of='control', how='pick', says='?',
+                    note='one two three\nfour five six')
+        self.assertEqual(['one two three four five six'],
+                         screens.note_lines(ask))
+
+    def test_a_blank_line_is_where_a_paragraph_ends(self):
+        ask = q.Ask(id='x', of='control', how='pick', says='?',
+                    note='first one\nhere\n\nsecond one')
+        self.assertEqual(['first one here', 'second one'],
+                         screens.note_lines(ask))
+
+    def test_no_note_is_no_lines(self):
+        ask = q.Ask(id='x', of='control', how='pick', says='?')
+        self.assertEqual([], screens.note_lines(ask))
+
+    def test_the_shipped_notes_carry_no_stray_breaks(self):
+        # Every one of them is written across several lines in the file.
+        for ask in q.read().asks:
+            for line in screens.note_lines(ask):
+                with self.subTest(ask=ask.id):
+                    self.assertNotIn('\n', line)
+
+    def test_two_paragraphs_do_not_run_together(self):
+        got = tui.aside_of(['first', 'second'])
+        said = [t for _tone, t in got]
+        self.assertEqual('', said[said.index('first') + 1])
+
+
+class WhatABoxIsLabelled(unittest.TestCase):
+    def test_the_descriptor_can_name_it(self):
+        sheet = q.read()
+        said = next(a for a in sheet.of(q.CONTROL) if a.id == 'buttons')
+        self.assertEqual('button IDs', screens.caption(said))
+
+    def test_otherwise_the_id_reads_as_words(self):
+        sheet = q.read()
+        said = next(a for a in sheet.of(q.CONTROL) if a.id == 'which_way')
+        self.assertEqual('which way', screens.caption(said))
+
+    def test_no_label_is_left_looking_like_a_field_name(self):
+        for a in q.read().asks:
+            with self.subTest(ask=a.id):
+                self.assertNotIn('_', screens.caption(a))
+
+
+class TheFiveFacts(unittest.TestCase):
+    """Per question, not per control: each of these covers every control
+    at once, because a comparison made on separate screens does not line
+    up with the next one."""
+
+    def setUp(self):
+        self.sheet = q.read()
+        self.dev = devicemap.load_all()[0]
+        self.asks = self.sheet.of(q.ALL)
+
+    def test_one_row_per_question(self):
+        self.assertEqual(len(self.asks),
+                         len(screens.fact_rows(self.dev, self.asks)))
+
+    def test_there_are_fewer_rows_than_controls_times_questions(self):
+        self.assertLess(len(self.asks),
+                        len(self.dev.groups(bindable=True)) * len(self.asks))
+
+    def test_a_row_says_how_many_are_still_guessed(self):
+        rows = screens.fact_rows(self.dev, self.asks)
+        left = screens._still_guessed(self.dev, self.asks[0])
+        self.assertIn(str(left), rows[0][1])
+
+    def test_the_counts_line_up(self):
+        # A column, or it is five sentences of different lengths.
+        rows = screens.fact_rows(self.dev, self.asks)
+        hits = [re.match(r'\S .+?\s\s+(\S)', t) for _tone, t in rows]
+        self.assertTrue(all(hits), rows)
+        self.assertEqual(1, len({m.start(1) for m in hits if m}), rows)
+
+    def test_a_row_reads_as_words_and_not_as_a_field(self):
+        for tone, text in screens.fact_rows(self.dev, self.asks):
+            with self.subTest(text=text):
+                self.assertNotIn('_', text)
+
+    def test_answered_for_reads_differently(self):
+        dev = fake.device(groups=[fake.group(
+            'button', [1], label='Pinky', id='pinky', hold_ok=True,
+            rapid_ok=True, modifier_ok=True, blind_distinct='high',
+            accident_risk='low')])
+        rows = screens.fact_rows(dev.under(None), self.asks)
+        self.assertTrue(all(t == screens.TONE['measured']
+                            for t, _x in rows), rows)
+
+    def test_the_side_says_the_question_and_how_many_are_left(self):
+        # The count, not the wording: a test that pins the prose breaks
+        # every time the prose gets better, which is most of the time.
+        head, said = screens.fact_side(self.dev, self.asks, 0)
+        shown = '\n'.join(t for _tone, t in said)
+        left = screens._still_guessed(self.dev, self.asks[0])
+        self.assertEqual(screens.caption(self.asks[0]), head)
+        self.assertIn(self.asks[0].says, shown)
+        self.assertIn(str(left), shown)
+
+    def test_the_side_says_so_when_nothing_is_left(self):
+        dev = fake.device(groups=[fake.group(
+            'button', [1], label='Pinky', id='pinky', hold_ok=True,
+            rapid_ok=True, modifier_ok=True, blind_distinct='high',
+            accident_risk='low')])
+        _head, said = screens.fact_side(dev.under(None), self.asks, 0)
+        shown = [t for tone, t in said if tone == screens.TONE['measured']]
+        self.assertTrue(shown, said)
+        with_left = screens.fact_side(self.dev, self.asks, 0)[1]
+        self.assertNotEqual([t for tone, t in with_left
+                             if tone == screens.TONE['measured']], shown)
+
+
+class AnsweringOneFact(unittest.TestCase):
+    def setUp(self):
+        self.sheet = q.read()
+        self.dev = devicemap.load_all()[0]
+        self.ctrls = [g for g in self.dev.groups(bindable=True) if g.id]
+
+    def ask(self, sets):
+        return next(a for a in self.sheet.of(q.ALL) if a.sets == sets)
+
+    def test_one_row_per_control(self):
+        rows = screens.answer_rows(self.dev, self.ask('hold_ok'), self.ctrls)
+        self.assertEqual(len(self.ctrls), len(rows))
+
+    def test_a_yes_and_a_no_do_not_read_alike(self):
+        self.assertNotEqual(screens.SAID[True], screens.SAID[False])
+
+    def test_a_row_shows_a_mark_and_not_python(self):
+        rows = screens.answer_rows(self.dev, self.ask('hold_ok'), self.ctrls)
+        shown = '\n'.join(t for _tone, t in rows)
+        self.assertNotIn('True', shown)
+        self.assertNotIn('False', shown)
+        self.assertIn(screens.SAID[True], shown)
+
+    def test_a_three_step_row_shows_the_value_it_has(self):
+        rows = screens.answer_rows(self.dev, self.ask('blind_distinct'),
+                                   self.ctrls)
+        names = {c['name'] for c
+                 in self.sheet.choices(self.ask('blind_distinct'))}
+        for tone, text in rows:
+            with self.subTest(text=text):
+                self.assertTrue(any(text.startswith(n) for n in names), text)
+
+    def test_an_answer_reads_as_a_word_and_not_as_python(self):
+        _head, said = screens.answer_side(self.dev, self.ask('hold_ok'),
+                                          self.ctrls, 0)
+        shown = '\n'.join(t for _tone, t in said)
+        self.assertNotIn('True', shown)
+        self.assertNotIn('False', shown)
+        self.assertRegex(shown, r'\b(yes|no)\b')
+
+    def test_every_note_reaches_the_panel_whole(self):
+        for ask in self.sheet.of(q.ALL):
+            _head, said = screens.answer_side(self.dev, ask, self.ctrls, 0)
+            shown = [t for _tone, t in said]
+            for para in screens.note_lines(ask):
+                with self.subTest(ask=ask.id):
+                    self.assertIn(para, shown)
+
+    def test_it_carries_the_answer_and_the_sentences_and_no_more(self):
+        # How many positions it has and how far away it is are true and
+        # beside the point: the question is about the feel of the thing.
+        ask = self.ask('hold_ok')
+        _head, said = screens.answer_side(self.dev, ask, self.ctrls, 0)
+        shown = [t for _tone, t in said if t]
+        want = [ask.says] + screens.note_lines(ask)
+        self.assertEqual(len(want) + 1, len(shown), shown)
+        self.assertNotIn('tier', ' '.join(shown))
+        self.assertNotIn('position', ' '.join(shown))
+
+    def test_a_guess_says_it_is_one(self):
+        _head, said = screens.answer_side(self.dev, self.ask('hold_ok'),
+                                          self.ctrls, 0)
+        self.assertIn('a guess', '\n'.join(t for _tone, t in said))
+
+    def test_the_control_comes_before_the_question(self):
+        # The title already names it; what you want next is its answer,
+        # not the question you have read twenty-five times.
+        ask = self.ask('hold_ok')
+        head, said = screens.answer_side(self.dev, ask, self.ctrls, 0)
+        shown = [t for _tone, t in said]
+        self.assertEqual(self.ctrls[0].label, head)
+        self.assertLess(shown.index(screens._answer_said(
+            self.ctrls[0].fact(ask.sets)) + '   (a guess)'),
+            shown.index(ask.says))
+
+    def test_it_does_not_repeat_what_the_border_says(self):
+        # The keys are in the sill. Saying them again costs two rows of
+        # the note, which is the half that tells you how to answer.
+        _head, said = screens.answer_side(self.dev, self.ask('hold_ok'),
+                                          self.ctrls, 0)
+        shown = '\n'.join(t for _tone, t in said)
+        self.assertNotIn('SPACE', shown)
+        self.assertNotIn('Press it', shown)
+
+
+class TheReachRounds(unittest.TestCase):
+    """Fifteen rounds for a whole device, not fifteen per control -- and
+    a list of them rather than fifteen screens in a row, because a row of
+    steps says neither how far in you are nor which are worth doing."""
+
+    def setUp(self):
+        self.sheet = q.read()
+        self.dev = devicemap.load_all()[0]
+        self.prof = devicemap.profile()
+        self.rounds = screens.reach_rounds(self.dev, self.prof,
+                                           self.sheet.vocabulary['level'])
+
+    def test_one_round_per_posture_and_finger(self):
+        want = len(self.sheet.vocabulary['level']) * len(devicemap.FINGERS)
+        self.assertEqual(want, len(self.rounds))
+
+    def test_there_are_fewer_rounds_than_controls(self):
+        # The whole point: asking per control would ask the same question
+        # twenty-six times and get answers that do not compare.
+        self.assertLess(len(self.rounds),
+                        len(self.dev.groups(bindable=True)))
+
+    def test_a_round_that_found_something_says_how_much(self):
+        one = next(r for r in self.rounds if r.found)
+        rows = screens.reach_rows(self.rounds)
+        said = '\n'.join(t for _tone, t in rows)
+        self.assertIn(one.finger, said)
+        self.assertIn(ui.plural(len(one.found), 'control'), said)
+
+    def test_a_posture_heads_its_own_fingers(self):
+        rows = screens.reach_rows(self.rounds)
+        heads = [t for tone, t in rows if tone == 'subhead']
+        self.assertEqual([c['says'] for c in self.sheet.vocabulary['level']],
+                         heads)
+
+    def test_the_side_names_controls_and_not_their_ids(self):
+        at = next(n for n in range(len(screens.reach_rows(self.rounds)))
+                  if (screens._round_at(self.rounds, n) or
+                      screens.Round({}, '', [], False)).found)
+        _head, said = screens.reach_side(self.dev, self.rounds, at, [])
+        shown = '\n'.join(t for _tone, t in said)
+        for g in self.dev.groups(bindable=True):
+            if g.id in (screens._round_at(self.rounds, at) or
+                        screens.Round({}, '', [], False)).found:
+                with self.subTest(ctrl=g.id):
+                    self.assertIn(g.label, shown)
+                    self.assertNotIn(g.id, shown)
+
+    def test_a_posture_row_explains_the_whole_thing(self):
+        head, said = screens.reach_side(self.dev, self.rounds, 0,
+                                        ['why this exists'])
+        self.assertIn('why this exists', [t for _tone, t in said])
+        self.assertNotIn('Reached this way:', [t for _tone, t in said])
+        self.assertTrue(head)
+
+    def test_the_explanation_is_paragraphs_and_not_one_block(self):
+        _head, said = screens.reach_side(self.dev, self.rounds, 0,
+                                         ['first para', 'second para'])
+        shown = [t for _tone, t in said]
+        self.assertIn('', shown[shown.index('first para') + 1:
+                                shown.index('second para')])
+
+    def test_a_round_does_not_repeat_the_explanation(self):
+        # You read it on the heading row you came past; here it pushes
+        # the posture off the screen.
+        _head, said = screens.reach_side(self.dev, self.rounds, 1,
+                                         ['what the rounds are for'])
+        self.assertNotIn('what the rounds are for',
+                         [t for _tone, t in said])
+
+    def test_a_posture_says_what_the_hand_is_doing(self):
+        for c in self.sheet.vocabulary['level']:
+            with self.subTest(level=c['name']):
+                said = ' '.join(c.get('hint') or [])
+                self.assertIn('hand', said + c['says'])
+
+    def test_a_walked_round_that_found_nothing_is_not_an_unwalked_one(self):
+        # Same empty list of controls, two different things: one you did
+        # and one you have not got to.
+        rounds = screens.reach_rounds(self.dev, self.prof,
+                                      self.sheet.vocabulary['level'])
+        lvl, finger = rounds[0].level, rounds[0].finger
+        done = [screens.Round(lvl, finger, [], True)]
+        todo = [screens.Round(lvl, finger, [], False)]
+        _h, a = screens.reach_side(self.dev, done, 1, [])
+        _h, b = screens.reach_side(self.dev, todo, 1, [])
+        self.assertNotEqual([t for _tone, t in a], [t for _tone, t in b])
+
+    def test_a_round_screen_says_how_to_answer_nothing(self):
+        # Most rounds reach nothing, and an empty one is an answer. Say
+        # so, or the screen looks like one you can only cancel out of.
+        rounds = screens.reach_rounds(self.dev, self.prof,
+                                      self.sheet.vocabulary['level'])
+        _title, aside, says = screens.round_prompt(rounds[0])
+        self.assertTrue(any('RETURN' in t for t in aside))
+        self.assertIn('RETURN', says)
+
+    def test_a_round_screen_carries_the_posture_and_not_the_preamble(self):
+        rounds = screens.reach_rounds(self.dev, self.prof,
+                                      self.sheet.vocabulary['level'])
+        one = rounds[0]
+        title, aside, _says = screens.round_prompt(one)
+        self.assertIn(one.level['says'], title)
+        for t in one.level.get('hint') or []:
+            self.assertIn(t, aside)
+        for t in screens.note_lines(self.sheet.of(q.DEVICE)[0]):
+            if t:
+                self.assertNotIn(t, aside)
+
+    def test_a_finger_is_named_so_it_reads(self):
+        # `middle` on its own reads as the middle of something.
+        self.assertEqual('middle finger', screens.finger_said('middle'))
+        self.assertEqual('thumb', screens.finger_said('thumb'))
+        for f in devicemap.FINGERS:
+            with self.subTest(finger=f):
+                self.assertTrue(screens.finger_said(f))
+
+
+class WhatWasThatButton(unittest.TestCase):
+    """The list says which button a row is. This says which row a button
+    is, which is the question you actually have: a piece of plastic under
+    your thumb and no idea what it is called."""
+
+    def dev(self):
+        return devicemap.load_all()[0]
+
+    def test_it_names_the_control(self):
+        dev = self.dev()
+        g = next(x for x in dev.groups(bindable=True) if x.label)
+        said = [t for _tone, t in screens.what_is(dev, g.buttons[0])]
+        self.assertIn(f'js {g.buttons[0]}', said)
+        self.assertIn(g.label, said)
+
+    def test_it_says_which_way_a_hat_position_points(self):
+        dev = self.dev()
+        g = next(x for x in dev.groups(bindable=True) if x.names)
+        said = [t for _tone, t in screens.what_is(dev, g.buttons[0])]
+        self.assertIn(g.names[0], said)
+
+    def test_a_button_nobody_owns(self):
+        dev = self.dev()
+        said = [t for _tone, t in screens.what_is(dev, 9999)]
+        self.assertIn('js 9999', said)
+        self.assertIn(screens.NOT_A_CONTROL['unknown'][0], said)
+
+    def test_it_finds_the_row_the_button_is_on(self):
+        dev = self.dev()
+        rows = screens.control_rows(dev)
+        g = next(x for x in dev.groups(bindable=True) if x.label)
+        at = screens.row_of(rows, dev, g.buttons[0])
+        assert at is not None
+        self.assertIs(g, rows[at].group)
+
+    def test_a_loose_button_finds_its_own_row(self):
+        dev = fake.device(groups=[fake.group('unknown', [6, 7, 8])])
+        rows = screens.control_rows(dev.under(None))
+        at = screens.row_of(rows, dev, 7)
+        assert at is not None
+        self.assertEqual(7, rows[at].button)
+
+    def test_a_button_on_no_row_finds_none(self):
+        dev = self.dev()
+        self.assertIsNone(screens.row_of(screens.control_rows(dev),
+                                         dev, 9999))
+
+
+class RowsThatAreNotControls(unittest.TestCase):
+    def test_each_kind_is_explained_in_the_help(self):
+        said = '\n'.join(t for _tone, t in screens.key_help())
+        for name, why in screens.NOT_A_CONTROL.values():
+            with self.subTest(row=name):
+                self.assertIn(name, said)
+                self.assertIn(why, said)
+
+    def test_the_why_is_not_on_every_line_of_the_list(self):
+        # It belongs in the help. On the list it pushes the row past the
+        # width and wraps, and the same sentence thirty times is noise.
+        dev = fake.device(groups=[fake.group('unwired', [1, 2], id='u')])
+        row = screens.control_rows(dev.under(None))[0]
+        for _name, why in screens.NOT_A_CONTROL.values():
+            self.assertNotIn(why, row.text)
+
+
+class TheKeysAndTheHelp(unittest.TestCase):
+    """One list, so the border and the help cannot disagree about which
+    keys there are. Two lists is one list that goes stale."""
+
+    def test_the_help_names_every_key(self):
+        said = '\n'.join(t for _tone, t in screens.key_help())
+        for k, _says, what in screens.KEYS:
+            with self.subTest(key=k):
+                self.assertIn(what, said)
+
+    def test_the_border_offers_every_key_worth_a_reminder(self):
+        shown = ' '.join(screens.sill_keys())
+        for k, says, _what in screens.KEYS:
+            if k == '?':
+                continue                        # it lives in the tail
+            with self.subTest(key=k):
+                self.assertIn(says, shown)
+
+    def test_help_is_not_in_the_border(self):
+        # It is in the bottom-right corner instead, where the count is not.
+        self.assertNotIn('? help', screens.sill_keys())
+
+    def test_every_key_can_be_pressed(self):
+        for k, _says, _what in screens.KEYS:
+            if k == '\u21b5':
+                continue                        # RETURN is the list's own
+            with self.subTest(key=k):
+                self.assertIn(k, screens.takes())
+
+    def test_a_letter_answers_in_either_case(self):
+        for k, _says, _what in screens.KEYS:
+            if k.isalpha():
+                with self.subTest(key=k):
+                    self.assertIn(k.upper(), screens.takes())
+
+    def test_every_mark_is_explained(self):
+        # The rule, not the wording: each mark gets a line of its own, and
+        # no two say the same thing. Pinning the prose means the test
+        # breaks when the prose improves.
+        said = [t for _tone, t in screens.key_help()]
+        at = said.index('MARKS')
+        rows = [t.strip() for t in said[at + 1:] if t.strip()]
+        explained = {}
+        for mark in screens.MARK.values():
+            shown = mark.strip() or '\u2423'
+            hit = [r for r in rows if r.startswith(shown + ' ')]
+            with self.subTest(mark=shown):
+                self.assertEqual(1, len(hit), rows)
+            explained[shown] = hit[0][len(shown):].strip()
+        self.assertEqual(len(explained), len(set(explained.values())))
+
+    def test_the_blank_mark_has_something_to_see(self):
+        # Nothing to draw reads as a line that forgot its first column.
+        said = '\n'.join(t for _tone, t in screens.key_help())
+        self.assertIn('\u2423', said)
+
+    def test_it_says_what_each_key_does_and_not_why(self):
+        # Man page, not an essay: the reasoning lives in comments.
+        for _k, _says, what in screens.KEYS:
+            with self.subTest(what=what):
+                self.assertLessEqual(len(what), 52)
+                self.assertNotIn('because', what)
+
+
+class SayingWhatWentAway(unittest.TestCase):
+    def test_nothing_went(self):
+        self.assertEqual('', screens.dropped_said([]))
+
+    def test_one_went(self):
+        said = screens.dropped_said(['click'])
+        self.assertIn('1 answer', said)
+        self.assertIn('click', said)
+
+    def test_several_went(self):
+        # The screen has to be able to say this, rather than quietly
+        # emptying three boxes while you were looking at the question.
+        said = screens.dropped_said(['which_way', 'click', 'order'])
+        self.assertIn('3 answers', said)
+        self.assertIn('order', said)
+
+
+if __name__ == '__main__':
+    unittest.main()

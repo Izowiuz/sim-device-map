@@ -1,0 +1,210 @@
+"""Hardware nobody plugged in.
+
+The dicts here are the on-disk schema, and they are handed to the real
+`devicemap.Device` rather than to a stand-in. A stub class agrees with
+whatever the test expects; the real one disagrees the moment the schema moves
+under it, which is the only reason to have these at all.
+
+Event lists are the shape `analyse_selector` and `analyse_trigger` read:
+`(t, button, down)`, seconds and a bool. `press`/`release` build them so a
+test reads as the gesture it describes rather than as a list of triples.
+"""
+
+import os
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+
+import devicemap                                            # noqa: E402
+
+
+def group(kind, buttons=(), **kw):
+    """One raw `[[group]]` table."""
+    g = {'kind': kind, 'buttons': list(buttons)}
+    g.update({k: v for k, v in kw.items() if v is not None})
+    g.setdefault('source', 'measured')
+    return g
+
+
+def control(kind, buttons=(), **kw):
+    """A parsed `Group`, whichever shape the dict happens to be in."""
+    return devicemap.Group(**devicemap.upgrade(group(kind, buttons, **kw)))
+
+
+def axis(index, kind='lever', **kw):
+    """One raw `[[axis]]` table."""
+    a = {'index': index, 'kind': kind}
+    a.update({k: v for k, v in kw.items() if v is not None})
+    a.setdefault('source', 'measured')
+    return a
+
+
+def raw(kind='stick', groups=(), axes=(), slug=None, product=None,
+        hand='', usb='3344:0001', serial='FAKE01', evdev=None,
+        buttons=None, fingerprint=None):
+    """The dict a capture file parses into."""
+    slug = slug or f'fake-{kind}'
+    every = [b for g in groups for b in _claimed(g)]
+    return {
+        'device': {'slug': slug, 'product': product or f'Fake {kind}',
+                   'vendor': 'Fake', 'kind': kind, 'hand': hand,
+                   'buttons': buttons if buttons is not None
+                              else 1 + max(every or [-1]),
+                   'axes': len(axes)},
+        'identity': [{'usb': usb, 'serial': serial,
+                      'evdev': evdev or f'Fake {kind}',
+                      'first_seen': '2026-01-01'}],
+        'fingerprint': dict(fingerprint or {}),
+        'axis': [dict(a) for a in axes],
+        'group': [dict(g) for g in groups],
+    }
+
+
+def device(kind='stick', groups=(), axes=(), path=None, **kw):
+    """A `devicemap.Device` with no hardware behind it."""
+    data = raw(kind, groups, axes, **kw)
+    return devicemap.Device(data, path or f'<fake:{data["device"]["slug"]}>')
+
+
+def _claimed(g):
+    """Every button a raw group mentions, whatever the field is called.
+
+    Deliberately not `capture.all_of` or `Group.all_buttons`: this is the
+    fixture working out how big a device has to be, and it must not inherit
+    the disagreement between those two that `test_bookkeeping` is about.
+    """
+    out = list(g.get('buttons') or [])
+    for k in ('push', 'rest_contact', 'travel_contact'):
+        if g.get(k) is not None:
+            out.append(g[k])
+    out.extend(g.get('transient') or [])
+    return out
+
+
+# ----------------------------------------------------------------- screen --
+
+class Screen:
+    """A grid that records what was drawn on it.
+
+    The one place a fake terminal earns its keep. Everything else about a
+    screen here is a pure function returning strings, but "a box clears
+    what was under it" is not something a string can be asked about -- and
+    a box drawn over a wider one used to leave that one's edges around it,
+    which reads as two dialogs open at once.
+    """
+
+    def __init__(self, h=14, w=78):
+        self.h, self.w = h, w
+        self.erase()
+
+    def getmaxyx(self):
+        return self.h, self.w
+
+    def erase(self):
+        self.rows = [[' '] * self.w for _ in range(self.h)]
+
+    def refresh(self):
+        pass
+
+    def getch(self):
+        return -1
+
+    def addstr(self, y, x, text, attr=0):
+        for i, ch in enumerate(text):
+            if 0 <= y < self.h and 0 <= x + i < self.w:
+                self.rows[y][x + i] = ch
+
+    def text(self):
+        return '\n'.join(''.join(r).rstrip() for r in self.rows).strip()
+
+
+# --------------------------------------------------------------- gestures --
+
+def press(t, button):
+    return (t, button, True)
+
+
+def release(t, button):
+    return (t, button, False)
+
+
+def squeeze(*buttons, start=1.0, step=0.1):
+    """Press them in order, then let go in the reverse order.
+
+    A trigger's stages nest: the second detent closes while the first is still
+    held, and opens before it. That nesting is what `analyse_trigger` reads to
+    tell a staged trigger from several buttons under one finger.
+    """
+    out, t = [], start
+    for b in buttons:
+        out.append(press(t, b))
+        t += step
+    for b in reversed(buttons):
+        out.append(release(t, b))
+        t += step
+    return out
+
+
+def sweep(*buttons, start=1.0, step=0.1):
+    """A rotary selector turned end to end.
+
+    The position it starts on is already closed, so it never sends a press --
+    it opens as the knob leaves it. That opening is the only evidence of where
+    the sweep began, and `analyse_selector` is built entirely around it.
+    """
+    out, t = [], start
+    out.append(release(t, buttons[0]))
+    t += step
+    for b in buttons[1:]:
+        out.append(press(t, b))
+        t += step
+        if b is not buttons[-1]:
+            out.append(release(t, b))
+            t += step
+    return out
+
+
+# ------------------------------------------------------------------ probe --
+
+def probed(dev=None, js='/dev/input/js9', usb=None, serial=None,
+           buttons=None, axes=None, axmap=None, hid=None, evdev=None):
+    """What `devicemap.probe()` hands back for a connected device.
+
+    Defaults are read off `dev` when one is given, so a test that wants an
+    EXACT match says `probed(dev)` and a test that wants a mismatch says which
+    field moved.
+    """
+    ident = (dev.identities[0] if dev is not None and dev.identities else {})
+    fp = (dev.fingerprint if dev is not None else {}) or {}
+    return {
+        'js': js,
+        'usb': (usb if usb is not None else ident.get('usb', '')).lower(),
+        'serial': serial if serial is not None else ident.get('serial', ''),
+        'buttons': buttons if buttons is not None
+                   else fp.get('buttons', dev.n_buttons if dev else 0),
+        'axes': axes if axes is not None
+                else fp.get('axes', dev.n_axes if dev else 0),
+        'axmap': list(axmap if axmap is not None else fp.get('axmap', [])),
+        'hid': list(hid if hid is not None else fp.get('hid', [])),
+        'evdev': evdev if evdev is not None else ident.get('evdev', ''),
+    }
+
+
+# ------------------------------------------------------------------ files --
+
+def on_disk(data, name='fake-device.toml'):
+    """`(Device, tempdir)` for a raw dict written out as a real file.
+
+    The writer replaces the file it was given and validates by reading it
+    back, so anything testing it needs a path that exists. The caller cleans
+    the directory up.
+    """
+    box = tempfile.TemporaryDirectory()
+    path = os.path.join(box.name, name)
+    with open(path, 'w') as fh:
+        fh.write('# a capture file\n')
+    return devicemap.Device(data, path), box

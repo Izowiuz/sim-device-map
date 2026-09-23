@@ -170,41 +170,37 @@ class WhatAControlIsWithoutTheWord(unittest.TestCase):
 
 
 class WhoAnsweredForThis(unittest.TestCase):
-    """A file that writes down its own guesses cannot say afterwards which
-    ones they were, so a guess is never written down."""
+    """Nobody but you.
+
+    There used to be a table of what a control of each shape is taken to
+    be, so that every question had an answer from the day the file was
+    written. It answered for controls nobody had touched, and a screen
+    showing it had to keep explaining that it was not an answer.
+    """
 
     def test_an_answer_in_the_file_wins(self):
         g = fake.control('hat4', [1, 2], hold_ok=True)
         self.assertTrue(g.fact('hold_ok'))
         self.assertEqual('measured', g.told('hold_ok'))
 
-    def test_otherwise_the_shape_answers(self):
-        # A hat springs back, so holding one is not comfortable.
+    def test_otherwise_there_is_no_answer(self):
         g = fake.control('hat4', [1, 2])
-        self.assertFalse(g.fact('hold_ok'))
-        self.assertEqual('guessed', g.told('hold_ok'))
+        self.assertIsNone(g.fact('hold_ok'))
+        self.assertEqual('missing', g.told('hold_ok'))
 
     def test_false_is_an_answer_like_any_other(self):
-        # The trap in using a falsy default as "nobody said": a button is
-        # held comfortably by default, and saying it is not must survive.
+        # The trap in reading a falsy value as "nobody said": saying a
+        # control is NOT comfortable to hold has to survive being stored.
         g = fake.control('button', [1], hold_ok=False)
         self.assertFalse(g.fact('hold_ok'))
         self.assertEqual('measured', g.told('hold_ok'))
 
-    def test_an_unwired_button_is_good_for_nothing(self):
-        g = fake.control('unwired', [1, 2])
-        self.assertFalse(g.fact('modifier_ok'))
-        self.assertEqual('none', g.fact('blind_distinct'))
-
-    def test_a_shape_nobody_tabulated(self):
-        g = fake.control('something-new', [1])
-        self.assertEqual('low', g.fact('accident_risk'))
-        self.assertEqual('guessed', g.told('accident_risk'))
-
-    def test_every_tabulated_shape_answers_every_fact(self):
-        for kind, said in devicemap.DEFAULTS.items():
+    def test_the_shape_of_a_thing_answers_nothing(self):
+        for kind in ('button', 'hat4', 'trigger', 'unwired', 'whatever'):
             with self.subTest(kind=kind):
-                self.assertEqual(set(devicemap.NO_FACTS), set(said))
+                g = fake.control(kind, [1, 2])
+                self.assertIsNone(g.fact('hold_ok'))
+                self.assertIsNone(g.fact('blind_distinct'))
 
 
 class TheDirectionVocabulary(unittest.TestCase):

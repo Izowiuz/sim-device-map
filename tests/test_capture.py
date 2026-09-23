@@ -14,6 +14,7 @@ import unittest
 import capture
 import devicemap
 import questions as q
+import screens
 
 
 def round_trip(group):
@@ -225,17 +226,13 @@ class WhatTheRoundsAmountTo(unittest.TestCase):
 
 
 class HowASpotIsWritten(unittest.TestCase):
-    def test_a_guess_says_so(self):
-        said = capture._spot_said({'part': 'panel', 'level': 'OFF',
-                                   'how': 'guessed'})
-        self.assertIn('guessed', said)
-
-    def test_the_ordinary_case_is_not_worth_a_column(self):
-        # `how` earns its place only when it is not what you would assume.
-        said = capture._spot_said({'part': 'stick', 'level': 'HOME',
-                                   'finger': 'thumb', 'how': 'measured'})
-        self.assertNotIn('how', said)
-        self.assertIn('thumb', said)
+    def test_a_spot_writes_every_part_of_itself(self):
+        # The one the wizard actually hands it: a `Spot`, not a dict.
+        import tomllib
+        spot = devicemap.Spot(part='stick', level='HOME', finger='thumb')
+        got = tomllib.loads('x = ' + capture._spot_said(spot))['x']
+        self.assertEqual({'part': 'stick', 'level': 'HOME',
+                          'finger': 'thumb'}, got)
 
     def test_no_finger_recorded_writes_no_finger(self):
         said = capture._spot_said({'part': 'panel', 'level': 'OFF',
@@ -363,52 +360,110 @@ class SteppingAnAnswerOn(unittest.TestCase):
     def ask(self, sets):
         return next(a for a in self.sheet.of(q.ALL) if a.sets == sets)
 
-    def test_a_yes_or_no_flips(self):
-        ask = self.ask('hold_ok')
-        was = self.g.fact('hold_ok')
-        capture._step(self.dev, self.g, ask, self.sheet.choices(ask))
-        self.assertEqual(not was, self.g.fact('hold_ok'))
+    def walk(self, sets, times):
+        ask = self.ask(sets)
+        seen = []
+        for _ in range(times):
+            capture._step(self.dev, self.g, ask, self.sheet.choices(ask))
+            seen.append(self.g.fact(sets))
+        return seen
 
-    def test_flipping_twice_puts_it_back(self):
-        # Pressing the thing again is how you undo a press you did not mean.
-        ask = self.ask('hold_ok')
-        was = self.g.fact('hold_ok')
-        capture._step(self.dev, self.g, ask, self.sheet.choices(ask))
-        capture._step(self.dev, self.g, ask, self.sheet.choices(ask))
-        self.assertEqual(was, self.g.fact('hold_ok'))
+    def test_a_yes_or_no_starts_at_yes(self):
+        self.assertIsNone(self.g.fact('hold_ok'))
+        self.assertEqual([True], self.walk('hold_ok', 1))
+
+    def test_it_walks_round_through_no_answer(self):
+        # Round the end is unanswered, because a control you touched by
+        # mistake has to be able to go back to it.
+        self.assertEqual([True, False, None], self.walk('hold_ok', 3))
 
     def test_answering_makes_it_answered(self):
         ask = self.ask('hold_ok')
-        self.assertEqual('guessed', self.g.told('hold_ok'))
+        self.assertEqual('missing', self.g.told('hold_ok'))
         capture._step(self.dev, self.g, ask, self.sheet.choices(ask))
         self.assertEqual('measured', self.g.told('hold_ok'))
 
-    def test_three_steps_walk_round(self):
-        ask = self.ask('blind_distinct')
-        picks = self.sheet.choices(ask)
-        seen = []
-        for _ in range(len(picks) + 1):
-            capture._step(self.dev, self.g, ask, picks)
-            seen.append(self.g.fact('blind_distinct'))
-        self.assertEqual(len(picks), len(set(seen)))
-        self.assertEqual(seen[0], seen[-1])
+    def test_a_graded_answer_walks_its_own_choices(self):
+        picks = [c['name'] for c in self.sheet.choices(self.ask('blind_distinct'))]
+        seen = self.walk('blind_distinct', len(picks) + 1)
+        self.assertEqual(picks, seen[:len(picks)])
+        self.assertIsNone(seen[-1])
 
-    def test_it_only_ever_lands_on_a_real_choice(self):
-        ask = self.ask('accident_risk')
-        picks = [c['name'] for c in self.sheet.choices(ask)]
-        for _ in range(7):
-            capture._step(self.dev, self.g, ask, self.sheet.choices(ask))
-            self.assertIn(self.g.fact('accident_risk'), picks)
+    def test_it_only_ever_lands_on_a_choice_or_on_nothing(self):
+        picks = [c['name'] for c in self.sheet.choices(self.ask('accident_risk'))]
+        for got in self.walk('accident_risk', 9):
+            self.assertIn(got, picks + [None])
+
+
+class Said:
+    """A tui that only remembers what it was told to show."""
+
+    def __init__(self):
+        self.shown = []
+
+    def popup(self, title, lines, full=False):
+        self.shown.append((title, [t for _tone, t in lines]))
+
+
+class Browsed:
+    """A tui that answers the reach list with ESC and keeps the call."""
+
+    def __init__(self):
+        self.kw = {}
+
+    def browse(self, title, lines, side, **kw):
+        self.kw = dict(kw, title=title, lines=lines, side=side)
+        return None, 0
+
+
+class TheReachListIsNotCountedInRows(unittest.TestCase):
+
+    def test_the_panel_counts_nothing_rather_than_rows(self):
+        # Three of the rows are postures, so a row count would disagree
+        # with the round count on the other half of the same frame.
+        dev = devicemap.load_all()[0]
+        prof = devicemap.profile()
+        tui = Browsed()
+        capture.ask_reach(tui, None, dev, prof)
+        count = tui.kw.get('count')
+        assert count is not None
+        self.assertEqual('', count(0))
 
 
 class WhatNoRoundReached(unittest.TestCase):
     """Whatever none of the rounds reached is something you take a hand
     off the device for -- but only once every round has been walked."""
 
+    def test_it_says_what_it_worked_out_rather_than_just_writing_it(self):
+        # The one answer on that screen nobody gave by pressing
+        # something. Written in silence it looks like data from nowhere.
+        dev = devicemap.load_all()[0]
+        tui, said = Said(), {'access': {}}
+        capture._hands_off(tui, dev, said)
+        self.assertEqual(1, len(tui.shown))
+        title, lines = tui.shown[0]
+        for t in [title] + lines:            # the word nobody understood
+            with self.subTest(said=t):
+                self.assertNotRegex(t.lower(), r'\bround')
+        for g in dev.groups(bindable=True):
+            if g.id:
+                with self.subTest(ctrl=g.id):
+                    self.assertTrue(any((g.label or g.kind) in t
+                                        for t in lines))
+
+    def test_it_stays_quiet_when_every_control_was_reached(self):
+        dev = devicemap.load_all()[0]
+        mine = [{'part': 'throttle', 'level': 'HOME', 'finger': 'thumb'}]
+        said = {'access': {g.id: list(mine)
+                           for g in dev.groups(bindable=True) if g.id}}
+        tui = Said()
+        capture._hands_off(tui, dev, said)
+        self.assertEqual([], tui.shown)
+
     def test_a_control_nobody_reached_ends_up_off(self):
         dev = devicemap.load_all()[0]
         said = {'access': {}}
-        capture._rest_are_off(dev, said)
+        capture._hands_off(Said(), dev, said)
         every = [g.id for g in dev.groups(bindable=True) if g.id]
         self.assertEqual(sorted(every), sorted(said['access']))
         self.assertTrue(all(sp[0]['level'] == 'OFF'
@@ -419,13 +474,13 @@ class WhatNoRoundReached(unittest.TestCase):
         one = next(g for g in dev.groups(bindable=True) if g.id)
         mine = [{'part': 'throttle', 'level': 'HOME', 'finger': 'thumb'}]
         said = {'access': {one.id: list(mine)}}
-        capture._rest_are_off(dev, said)
+        capture._hands_off(Said(), dev, said)
         self.assertEqual(mine, said['access'][one.id])
 
     def test_nothing_that_cannot_be_bound_is_placed(self):
         dev = devicemap.load_all()[0]
         said = {'access': {}}
-        capture._rest_are_off(dev, said)
+        capture._hands_off(Said(), dev, said)
         for g in dev.groups():
             if not g.bindable and g.id:
                 with self.subTest(ctrl=g.id):

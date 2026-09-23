@@ -27,6 +27,7 @@ be the one to hold the shell both of them draw on.
 """
 
 import curses
+from functools import partial
 import textwrap
 import time
 
@@ -338,9 +339,13 @@ class Tui:
         """
         self.scr.erase()
         if full:
-            self._back = (title, list(lines), tuple(keys), tail, right)
+            # Not the arguments this was called with: a two-panel screen
+            # is also something a dialog can open over, and that is not a
+            # box and cannot be written down as one.
+            self._back = partial(self._draw, title, list(lines),
+                                 tuple(keys), tail, 0, None, True, right)
         elif self._back is not None:
-            self._draw(*self._back[:4], 0, None, True, self._back[4])
+            self._back()
             self._clear_round(title, lines, full)
         page = self._draw(title, lines, keys, tail, top, sel, full, right)
         self.scr.refresh()
@@ -422,7 +427,7 @@ class Tui:
         return (0, 0, h, left), (0, left, h, w - 1 - left)
 
     def browse(self, title, lines, side, keys=(), tail='', right='',
-               index=0, takes=(), aside='', poll=None):
+               index=0, takes=(), aside='', poll=None, count=None):
         """A list on the left, what the cursor is on described on the right.
 
         Returns `(what, index)`: `what` is `\'enter\'`, one of `takes`, or
@@ -434,6 +439,10 @@ class Tui:
 
         `poll()` is asked each tick and may return an index to jump to --
         it is how the hardware in your hands moves the cursor.
+
+        `count(n)` is what the detail panel's edge says about row `n`. The
+        default counts rows, which is right until the list has headings in
+        it and the rows stop matching the things they list.
         """
         sel, top = index, 0
         while True:
@@ -442,27 +451,20 @@ class Tui:
                 if at is not None:
                     sel = at
             h, w = self.scr.getmaxyx()
-            (ly, lx, lh, lw), (ry, rx, rh, rw) = self.halves(h, w)
-            page = lh - 2
+            page = self.halves(h, w)[0][2] - 2
             sel = max(0, min(sel, len(lines) - 1))
             if sel < top:
                 top = sel
             elif sel >= top + page:
                 top = sel - page + 1
             self.scr.erase()
-            self._frame((ly, lx, lh, lw), title, right, keys, tail)
-            at, room = text_in(lx, lw)
-            for n, (tone, text) in enumerate(lines[top:top + page]):
-                lit = self.theme.sel if top + n == sel else self.theme[tone]
-                self.put(ly + 1 + n, at, text[:room], lit)
-            head, rows = side(sel)
-            self._frame((ry, rx, rh, rw), head or aside,
-                        f'{sel + 1} of {len(lines)}')
-            at, room = text_in(rx, rw)
-            said = [x for tone, text in rows
-                    for x in ((tone, f) for f in fit(room, text))]
-            for n, (tone, text) in enumerate(said[:rh - 2]):
-                self.put(ry + 1 + n, at, text[:room], self.theme[tone])
+            self._halves(title, lines, side, keys, tail, right, aside,
+                         count, sel, top)
+            # What a dialog opened from here sits on. Without this the
+            # backdrop is whatever full-screen box came last, which is not
+            # the screen you opened the dialog from.
+            self._back = partial(self._halves, title, lines, side, keys,
+                                 tail, right, aside, count, sel, top)
             self.scr.refresh()
             k = self.key(0.1 if poll is not None else 0.5)
             if k in ('up', 'k'):
@@ -479,6 +481,26 @@ class Tui:
                 return k, sel
             elif k == 'esc':
                 return None, sel
+
+    def _halves(self, title, lines, side, keys, tail, right, aside, count,
+                sel, top):
+        """Both panels, on whatever is already there."""
+        h, w = self.scr.getmaxyx()
+        (ly, lx, lh, lw), (ry, rx, rh, rw) = self.halves(h, w)
+        self._frame((ly, lx, lh, lw), title, right, keys, tail)
+        at, room = text_in(lx, lw)
+        for n, (tone, text) in enumerate(lines[top:top + lh - 2]):
+            lit = self.theme.sel if top + n == sel else self.theme[tone]
+            self.put(ly + 1 + n, at, text[:room], lit)
+        head, rows = side(sel)
+        self._frame((ry, rx, rh, rw), head or aside,
+                    count(sel) if count is not None
+                    else f'{sel + 1} of {len(lines)}')
+        at, room = text_in(rx, rw)
+        said = [x for tone, text in rows
+                for x in ((tone, f) for f in fit(room, text))]
+        for n, (tone, text) in enumerate(said[:rh - 2]):
+            self.put(ry + 1 + n, at, text[:room], self.theme[tone])
 
     def _frame(self, rect, title, right='', keys=(), tail=''):
         """Just the border of a panel."""

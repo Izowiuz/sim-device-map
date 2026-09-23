@@ -153,7 +153,7 @@ def control_rows(dev):
         state = _state(g)
         out.append(Row(TONE[state],
                        f'{MARK[state]} {_called(g)[:28]:28} '
-                       f'{_owns(g):14} {_where(g):9} {_left_said(g)}',
+                       f'{_owns(g):16} {_where(g):9} {_left_said(g)}',
                        group=g))
     return out
 
@@ -165,7 +165,7 @@ FINGER_SAID = {'thumb': 'thumb', 'index': 'index finger',
                'pinky': 'pinky'}
 
 
-def finger_said(name):
+def finger_said(name: str):
     return FINGER_SAID.get(name, name)
 
 
@@ -193,8 +193,13 @@ def reach_rounds(dev, prof, levels):
             found = [c for c, spots in said.items()
                      if any(sp.get('level') == lvl['name']
                             and sp.get('finger') == finger for sp in spots)]
+            # Walked, and nothing else. What `access` says about this
+            # posture may have come from somewhere other than a round --
+            # the old captures said reach in prose and it was read into
+            # spots -- and a round counted done because of that claims
+            # work nobody did.
             out.append(Round(lvl, finger, sorted(found),
-                             [lvl['name'], finger] in walked or bool(found)))
+                             [lvl['name'], finger] in walked))
     return out
 
 
@@ -204,15 +209,22 @@ def reach_rows(rounds):
     for r in rounds:
         if r.level['name'] != seen:
             seen = r.level['name']
-            out.append(('subhead', r.level['says']))
-        mark = MARK['measured'] if r.found else (
-            MARK['guessed'] if r.done else MARK['missing'])
+            said = r.level['says']
+            out.append(('subhead', said[:1].upper() + said[1:]))
+        # No mark in front: the tail of the row already says which of the
+        # two this is, and a glyph that repeats it is one more thing to
+        # work out the meaning of.
         said = (ui.plural(len(r.found), 'control') if r.found
-                else 'nothing' if r.done else 'not done')
-        out.append((TONE['measured'] if r.found else
-                    TONE['guessed'] if r.done else TONE['missing'],
-                    f'  {mark} {r.finger:<8} {said}'))
+                else 'reached nothing' if r.done else 'not done yet')
+        out.append((TONE['measured'] if r.done else TONE['missing'],
+                    f'    {r.finger:<8} {said}'))
     return out
+
+
+#: How many controls a round's panel lists before it counts the rest.
+#: The panel does not scroll, and what runs past its last row is written
+#: and never read.
+SHOWN = 6
 
 
 def reach_side(dev, rounds, at, note):
@@ -226,28 +238,27 @@ def reach_side(dev, rounds, at, note):
     if one is None:
         said = [x for n, t in enumerate(note)
                 for x in ((('plain', ''),) if n else ()) + (('plain', t),)]
-        said += [('plain', ''),
-                 ('meta', f'There are {len(rounds)} rounds for the whole'
-                          ' device, not one per control. In each round you'
-                          ' press whatever that one finger can reach, which'
-                          ' is often nothing.')]
-        return 'what the rounds are for', said
+        return 'what this is for', said
 
     named = {g.id: g.label or g.kind for g in dev.groups(bindable=True)}
-    said = [('meta', t) for t in (one.level.get('hint') or [])]
+    posture = one.level['says']
+    said = [('subhead', posture[:1].upper() + posture[1:])]
+    said += [('meta', t) for t in (one.level.get('hint') or [])]
     said.append(('plain', ''))
     if one.found:
         said.append(('measured', 'Reached this way:'))
-        said += [('plain', f'  {named.get(c, c)}') for c in one.found]
-        said += [('plain', ''),
-                 ('meta', '\u21b5 does this round again.')]
+        said += [('plain', f'  {named.get(c, c)}')
+                 for c in one.found[:SHOWN]]
+        if len(one.found) > SHOWN:
+            said.append(('meta', f'  and {len(one.found) - SHOWN} more'))
+        said += [('plain', ''), ('meta', '\u21b5 measures it again.')]
     else:
-        said.append(('guessed' if one.done else 'unset',
+        said.append(('measured' if one.done else 'unset',
                      'You reached nothing this way.' if one.done
                      else 'Not done yet.'))
         said += [('plain', ''),
-                 ('meta', '\u21b5 starts this round.')]
-    return f'{finger_said(one.finger)}, {one.level["says"]}', said
+                 ('meta', '\u21b5 measures this one.')]
+    return finger_said(one.finger), said
 
 
 def round_prompt(one):
@@ -267,6 +278,27 @@ def round_prompt(one):
             ' then RETURN.')
 
 
+def next_round_at(rounds, at):
+    """The row to jump to from a posture heading: its first undone round.
+
+    All of them done, or the cursor already on a round, and it stays put.
+    """
+    if _round_at(rounds, at) is not None:
+        return at
+    for n in range(at + 1, _rows_in(rounds)):
+        one = _round_at(rounds, n)
+        if one is None:
+            break
+        if not one.done:
+            return n
+    return at + 1 if at + 1 < _rows_in(rounds) else at
+
+
+def _rows_in(rounds):
+    """How many rows `reach_rows` makes of these."""
+    return len(reach_rows(rounds))
+
+
 def _round_at(rows_rounds, at):
     """The round a row index stands for, or None for a posture heading."""
     n, seen = 0, None
@@ -283,7 +315,7 @@ def _round_at(rows_rounds, at):
 
 
 def fact_rows(dev, asks):
-    """[(tone, text)] -- the five facts, and how many controls still guess.
+    """[(tone, text)] -- the five facts, and how many are still to answer.
 
     Per question, not per control: each of these covers every control at
     once, because "more distinct than that one" only means something side
@@ -292,12 +324,11 @@ def fact_rows(dev, asks):
     out = []
     wide = max((len(caption(a)) for a in asks), default=0)
     for ask in asks:
-        left = _still_guessed(dev, ask)
+        left = _left_to_answer(dev, ask)
         state = 'measured' if not left else 'guessed'
         out.append((TONE[state],
                     f'{MARK[state]} {caption(ask):<{wide}}  '
-                    + (f'{left} with no answer' if left
-                       else 'all answered')))
+                    + (f'{left} to go' if left else 'all answered')))
     return out
 
 
@@ -311,10 +342,14 @@ def answer_rows(dev, ask, controls):
     for g in controls:
         got = g.fact(ask.sets)
         told = g.told(ask.sets)
-        mark = SAID[got] if isinstance(got, bool) else str(got)
+        mark = ('' if got is None else SAID[got] if isinstance(got, bool)
+                else str(got))
+        # The answer and what it is about, and nothing else. How far away
+        # the control is is true and beside the point: the question is
+        # about the feel of the thing under your finger, and a column that
+        # says nothing towards it is a column to read past on every row.
         out.append((TONE[told] if told == 'measured' else 'meta',
-                    f'{mark:<6} {(g.label or g.kind)[:30]:30} tier '
-                    f'{g.tier if g.tier is not None else "?"}'))
+                    f'{mark:<6} {g.label or g.kind}'))
     return out
 
 
@@ -331,9 +366,7 @@ def answer_side(dev, ask, controls, at):
     half that tells you how to answer.
     """
     g = controls[at]
-    told = g.told(ask.sets)
-    said = [(TONE[told], _answer_said(g.fact(ask.sets))
-             + ('' if told == 'measured' else '   (a guess)')),
+    said = [(TONE[g.told(ask.sets)], _answer_said(g.fact(ask.sets))),
             ('plain', ''),
             ('plain', ask.says)]
     said += ui.aside_of(note_lines(ask))
@@ -342,6 +375,8 @@ def answer_side(dev, ask, controls, at):
 
 def _answer_said(got):
     """An answer in words rather than as whatever it is stored as."""
+    if got is None:
+        return 'no answer yet'
     if isinstance(got, bool):
         return 'yes' if got else 'no'
     return str(got)
@@ -350,7 +385,7 @@ def _answer_said(got):
 def fact_side(dev, asks, at):
     """(title, [(tone, text)]) for the fact the cursor is on."""
     ask = asks[at]
-    left = _still_guessed(dev, ask)
+    left = _left_to_answer(dev, ask)
     said = [('plain', ask.says)] + ui.aside_of(note_lines(ask))
     said.append(('plain', ''))
     if left:
@@ -363,10 +398,10 @@ def fact_side(dev, asks, at):
     return caption(ask), said
 
 
-def _still_guessed(dev, ask):
+def _left_to_answer(dev, ask):
     """How many controls have no answer to this one."""
     return sum(1 for g in dev.groups(bindable=True)
-               if g.told(ask.sets) == 'guessed')
+               if g.told(ask.sets) == 'missing')
 
 
 def what_is(dev, button):
@@ -442,10 +477,23 @@ def _owns(group):
     A row that is not a control has no positions. Calling its buttons
     positions reads as a described control with three of them, which is
     the one thing it is not.
+
+    A dial and a mini-stick have no positions at all -- they report an
+    axis -- and `0 positions` there reads as a control somebody emptied
+    rather than as one of a different kind.
     """
     if not group.bindable:
         return ui.plural(len(group.all_buttons), 'button')
-    return ui.plural(len(group.places), 'position')
+    said = []
+    if group.places:
+        said.append(ui.plural(len(group.places), 'position'))
+    if group.axes:
+        said.append(ui.plural(len(group.axes), 'axis', 'axes'))
+    if group.push is not None and not group.places:
+        # Where there are positions the click is one more thing you can
+        # press and not news. Where there are none it is the only one.
+        said.append('a click')
+    return ', '.join(said) or ui.plural(len(group.all_buttons), 'button')
 
 
 def _where(group):
@@ -485,10 +533,71 @@ def _state(group):
 
 
 def _unanswered(group):
-    """How many of its ergonomic facts are still the shape's guess."""
+    """How many of its ergonomic facts nobody has answered."""
     if not group.bindable:
         return 0
-    return sum(1 for f in FACTS if group.told(f) == 'guessed')
+    return sum(1 for f in FACTS if group.told(f) == 'missing')
+
+
+def found_rows(found):
+    """[(tone, text)] -- the devices plugged in, and what is left on each.
+
+    Whichever of the two jobs is still in front of you, and never a
+    ratio: controls are made by pressing buttons, so a device nobody has
+    touched has none, and "0 of 0 controls done" is a finished-looking
+    way of saying nothing has been started.
+
+    Buttons come from the firmware and are there from the first run, so
+    the first job counts in those. Only once they are all in a control
+    does the count move on to what is still unanswered about them.
+    """
+    out = []
+    for m in found:
+        dev = m.device
+        loose, _axes = dev.unknown()
+        done, total = described(dev)
+        if loose:
+            said, tone = (f'{ui.plural(len(loose), "button")} not in a'
+                          ' control'), 'unset'
+        elif total:
+            said = f'{done}/{total} controls done'
+            tone = ('measured' if done == total else
+                    'guessed' if done else 'unset')
+        else:
+            said, tone = 'nothing on it yet', 'unset'
+        if not m.ok:
+            tone = 'unset'
+        out.append((tone, f'{dev.product[:28]:28} {said}'
+                    + ('' if m.ok else f'  [{m.status}]')))
+    return out
+
+
+def found_hints(m):
+    """[str] -- what to say about the device the cursor is on."""
+    dev = m.device
+    said = [f'{dev.kind}, {dev.hand} hand' if dev.hand else dev.kind]
+    loose, _axes = dev.unknown()
+    blank = [g for g in dev.groups(bindable=True) if not g.access]
+    left = sum(_unanswered(g) for g in dev.groups(bindable=True))
+    if loose:
+        said.append(f'{ui.plural(len(loose), "button")} nobody has sorted'
+                    ' into a control yet.')
+    if blank:
+        said.append(f'{ui.plural(len(blank), "control")} with no reach'
+                    ' measured.')
+    if left:
+        said.append(f'{ui.plural(left, "answer")} still to give.')
+    if not loose and not blank and not left:
+        said.append('Nothing outstanding.')
+    if not m.ok:
+        said.append(m.explain())
+    return said
+
+
+def described(dev):
+    """(controls with nothing left to answer, controls)."""
+    got = [g for g in dev.groups(bindable=True)]
+    return sum(1 for g in got if _state(g) == 'measured'), len(got)
 
 
 def device_rows(prof, devices):

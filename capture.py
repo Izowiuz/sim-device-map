@@ -276,10 +276,9 @@ def write_device(dev):
             out.append(emit_str('note', a['note']))
 
     out.append('\n# ------------------------------------------------------------------ buttons')
-    # Upgraded and named before anything is emitted, and put back on the
-    # device: what is in memory and what is on disk are then the same shape,
-    # so the next flow to touch a group does not meet the older one.
-    groups = sorted((devicemap.upgrade(g) for g in raw.get('group', [])),
+    # Named before anything is emitted, and put back on the device, so
+    # the next flow to touch a group sees the ids this write gave them.
+    groups = sorted(raw.get('group', []),
                     key=lambda g: (g['kind'] == 'unknown',
                                    min(all_of(g) or [0])))
     raw['group'] = devicemap.name_ids(groups)
@@ -377,14 +376,11 @@ def write_profile(prof):
 def _spot_said(spot):
     """One way of reaching a control, as an inline table."""
     got = spot if isinstance(spot, dict) else {
-        'part': spot.part, 'level': spot.level, 'finger': spot.finger,
-        'how': spot.how}
+        'part': spot.part, 'level': spot.level, 'finger': spot.finger}
     bits = [f'part = {emit_val(got["part"])}',
             f'level = {emit_val(got["level"])}']
     if got.get('finger'):
         bits.append(f'finger = {emit_val(got["finger"])}')
-    if got.get('how') and got['how'] != 'measured':
-        bits.append(f'how = {emit_val(got["how"])}')
     return '{ ' + ', '.join(bits) + ' }'
 
 
@@ -423,14 +419,14 @@ def reconcile(raw, n_buttons):
 
 def all_of(g):
     """`Group.all_buttons` over the raw dict, before it is parsed."""
-    return [s['button'] for s in devicemap.upgrade(g).get('states') or []
+    return [s['button'] for s in g.get('states') or []
             if s.get('button') is not None]
 
 
 def buttons_of(g):
     """A raw group's position buttons, in press order, whatever shape the
     dict is in. The contacts it also owns are in `all_of`."""
-    return [st['button'] for st in devicemap.upgrade(g).get('states') or []
+    return [st['button'] for st in g.get('states') or []
             if not st.get('role') and st.get('button') is not None]
 
 
@@ -441,22 +437,10 @@ def set_buttons(g, buttons, names=()):
     positions have no names -- a plain button, the uncaptured bucket --
     passes none.
     """
-    up = devicemap.upgrade(dict(g))
-    for dead in set(g) - set(up):
-        del g[dead]
-    g.update(up)
     kept = [st for st in g.get('states') or [] if st.get('role')]
-    made = []
-    for n, b in enumerate(buttons):
-        st = {'button': b}
-        if n < len(names) and names[n]:
-            st['name'] = names[n]
-            if g['kind'] not in ('trigger', 'selector'):
-                st['direction'] = names[n]
-        if g['kind'] in devicemap.LATCHING:
-            st['latching'] = True
-        made.append(st)
-    g['states'] = made + kept
+    g['states'] = states_of(
+        g['kind'], buttons, names,
+        directional=g['kind'] not in ('trigger', 'selector')) + kept
     return g
 
 
@@ -770,16 +754,24 @@ def ask_reach(tui, fd, dev, prof):
         what, at = tui.browse(
             f'Reach — {dev.product}', rows,
             lambda n: screens.reach_side(dev, rounds, n, note),
-            keys=('↑↓ move', '↵ do this round', 'ESC done'),
-            right=f'{done} of {len(rounds)} rounds done',
-            index=at, aside='this round')
+            keys=('↑↓ move', '↵ measure', 'ESC done'),
+            right=f'{done} of {len(rounds)} done',
+            index=at, aside='this round',
+            # The rows are not the rounds -- three of them are postures --
+            # so counting rows here would disagree with the count on the
+            # other half of the frame. Which round it is, the cursor says.
+            count=lambda _n: '')
         if what is None:
             if done == len(rounds):
-                _rest_are_off(dev, said)
+                _hands_off(tui, dev, said)
                 write_profile(prof)
             return moved
         one = screens._round_at(rounds, at)
-        if one is not None and _one_round(tui, fd, dev, prof, said, one):
+        if one is None:
+            # A heading is not a round. Rather than a key that does
+            # nothing on a third of the rows, it goes where it says.
+            at = screens.next_round_at(rounds, at)
+        elif _one_round(tui, fd, dev, prof, said, one):
             moved = True
 
 
@@ -810,17 +802,30 @@ def _one_round(tui, fd, dev, prof, said, one):
     return True
 
 
-def _rest_are_off(dev, said):
+def _hands_off(tui, dev, said):
     """Once every round is walked, what none of them reached is off it.
 
     Only then. Half the rounds say nothing about a control except that it
     has not come up yet, and writing that down as OFF would be recording
     an answer nobody gave.
+
+    Said out loud, because it is the one answer on this screen you never
+    gave by pressing something: it is what the rounds add up to, and it
+    lands on whatever you did not press in any of them.
     """
     access = said.setdefault('access', {})
-    for g in dev.groups(bindable=True):
-        if g.id and not access.get(g.id):
-            access[g.id] = [{'part': 'panel', 'level': 'OFF'}]
+    left = [g for g in dev.groups(bindable=True)
+            if g.id and not access.get(g.id)]
+    for g in left:
+        access[g.id] = [{'part': 'panel', 'level': 'OFF'}]
+    if left:
+        tui.popup(
+            'Every finger done',
+            [('plain', f'You never pressed {ui.plural(len(left), "control")}'
+                       ' from any grip, so reaching them means taking your'
+                       ' hand off the device. That is now what they say.'),
+             ('plain', '')]
+            + [('meta', f'  {g.label or g.kind}') for g in left])
 
 
 def reach_from(dev, pressed):
@@ -918,19 +923,19 @@ def ask_all(tui, fd, dev, ask):
 
 
 def _step(dev, group, ask, picks):
-    """Move a control's answer on by one: off, on, off again.
+    """Move a control's answer on by one, and off the end back to none.
 
-    One gesture for both shapes of question. A yes/no flips; one with
-    three steps walks round them, because pressing the thing twice to get
-    back where you were is how you undo a press you did not mean.
+    One gesture for both shapes of question: a yes/no has two answers to
+    walk round and a graded one has three. Round the end is no answer at
+    all, because the alternative is that a control you touched by mistake
+    can never go back to unanswered -- and unanswered is the one state
+    nothing else can put back.
     """
-    if not picks:
-        _set_fact(dev, group, ask.sets, not group.fact(ask.sets))
-        return
-    names = [c['name'] for c in picks]
+    names = [c['name'] for c in picks] if picks else [True, False]
     now = group.fact(ask.sets)
     at = names.index(now) if now in names else -1
-    _set_fact(dev, group, ask.sets, names[(at + 1) % len(names)])
+    _set_fact(dev, group, ask.sets,
+              names[at + 1] if at + 1 < len(names) else None)
 
 
 def _set_fact(dev, group, field, value):
@@ -1040,9 +1045,9 @@ def _which_way(names):
 def build_group(run, keep=None):
     """A raw group dict out of what a run answered.
 
-    This is where `sets` in the descriptor becomes a field in the file. It
-    hands back the old shape and lets `devicemap.upgrade` make states of it,
-    so one place knows what a group looks like on disk.
+    This is where `sets` in the descriptor becomes a field in the file.
+    The positions go through `states_of`, which is also what a reorder
+    goes through, so one place knows what a group looks like on disk.
     """
     said = run.given
     seen, _held = said.get('buttons', ([], set()))
@@ -1050,32 +1055,34 @@ def build_group(run, keep=None):
     # dial or a mini-stick has nothing else: collecting picks it up with
     # the rest, and leaving it here makes it its own position as well.
     seen = [b for b in seen if b != said.get('click')]
-    entry = {'kind': said['kind'], 'buttons': list(said.get('order') or seen),
-             'label': said.get('name', ''), 'source': 'measured'}
-    dirs = run.said.get('dirs') or []
-    if dirs:
-        entry['dirs'] = list(dirs[:len(entry['buttons'])])
+    entry = {'kind': said['kind'], 'label': said.get('name', ''),
+             'source': 'measured'}
+    places = list(said.get('order') or seen)
+    names = list(run.said.get('dirs') or [])[:len(places)]
+    directional = bool(names)
+    contacts = []
     if said.get('click') is not None:
-        entry['push'] = said['click']
+        contacts.append(('push', said['click']))
     pull = said.get('pull')
     if pull:
-        entry['buttons'] = list(pull['stages'])
-        entry['stages'] = ['first', 'second', 'third'][:len(pull['stages'])]
-        entry.pop('dirs', None)
+        places = list(pull['stages'])
+        names = ['first', 'second', 'third'][:len(places)]
+        directional = False
         if pull.get('cumulative'):
             entry['cumulative'] = True
         if pull.get('rest') is not None and said.get('returns') == 'yes':
-            entry['rest_contact'] = pull['rest']
-        if pull.get('transient'):
-            entry['transient'] = list(pull['transient'])
+            contacts.append(('rest', pull['rest']))
+        contacts += [('transient', b) for b in pull.get('transient') or []]
     sweep = said.get('sweep')
     if sweep:
-        entry['buttons'] = list(sweep['order'])
+        places = list(sweep['order'])
         # A sweep does not name its own positions; a capture already on
         # file does, and re-reading one must not rename what it found.
-        entry['positions'] = list(sweep.get('names') or [
-            f'position {n + 1}' for n in range(len(sweep['order']))])
-        entry.pop('dirs', None)
+        names = list(sweep.get('names') or [
+            f'position {n + 1}' for n in range(len(places))])
+        directional = False
+    entry['states'] = states_of(entry['kind'], places, names, directional,
+                                contacts)
     if keep is not None:
         # A control keeps its name through a recapture, because a profile
         # points at it by that name and the buttons are what moved. Its
@@ -1085,7 +1092,38 @@ def build_group(run, keep=None):
             entry['id'] = keep.id
         if keep.axes:
             entry['axes'] = list(keep.axes)
-    return devicemap.upgrade(entry)
+    return entry
+
+
+#: What each contact is called where it is not a position of the control.
+CONTACT_SAID = {'push': 'push', 'rest': 'rest', 'travel': 'travel',
+                'transient': 'passing'}
+
+
+def states_of(kind, places, names=(), directional=False, contacts=()):
+    """The positions of a control, as the file has them.
+
+    Positions first and in press order, then whatever the control also
+    closes: a click, a rest contact, a travel contact, the ones it brushes
+    on the way. That order is what a consumer walking the list sees.
+
+    Only what is not the default goes in. A state carrying every field it
+    could have is unreadable, and a default written down is a default
+    somebody has to keep in step by hand.
+    """
+    latching = kind in devicemap.LATCHING
+    out = []
+    for n, b in enumerate(places):
+        name = names[n] if n < len(names) else ''
+        out.append({'button': b}
+                   | ({'name': name, 'direction': name} if name and directional
+                      else {'name': name} if name else {})
+                   | ({'latching': True} if latching else {}))
+    for role, b in contacts:
+        out.append({'name': CONTACT_SAID[role], 'button': b, 'role': role}
+                   | ({'latching': True} if role in ('rest', 'travel')
+                      else {}))
+    return out
 
 
 def capture_ministick(tui, dev, fd, click=None, first_axis=None,
@@ -1379,9 +1417,10 @@ def _mark_unwired(tui, dev, btns):
                        ['They stop being offered as free buttons.'],
                        default=False):
         return False
-    dev._raw['group'].append(devicemap.upgrade(
-        {'kind': 'unwired', 'buttons': list(btns), 'source': 'measured',
-         'label': 'Reported by the firmware, nothing attached'}))
+    dev._raw['group'].append(
+        {'kind': 'unwired', 'source': 'measured',
+         'states': states_of('unwired', list(btns)),
+         'label': 'Reported by the firmware, nothing attached'})
     return True
 
 
@@ -1392,15 +1431,8 @@ def tui_main(scr, found):
         if len(found) == 1:
             m = found[0]
         else:
-            items, hints = [], []
-            for mm in found:
-                d = mm.device
-                b, _a = d.unknown()
-                flag = '' if mm.ok else f'   [{mm.status}]'
-                items.append(f'{d.product}  —  {d.n_buttons - len(b)}/'
-                             f'{d.n_buttons} buttons described{flag}')
-                hints.append([f'{mm.probe.get("usb")} / {mm.probe.get("serial")}',
-                              f'{d.kind}, {d.hand} hand', mm.explain()])
+            items = [t for _tone, t in screens.found_rows(found)]
+            hints = [screens.found_hints(mm) for mm in found]
             i = tui.menu('sim-device-map — which device?', items, hints,
                          quits=True)
             if i is None:

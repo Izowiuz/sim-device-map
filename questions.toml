@@ -127,10 +127,12 @@ how   = "rounds"
 says  = "Press everything you can reach from here."
 sets  = "access"
 uses  = "level"
-note  = """This works out how far away each control is.
+# No count in here and none generated for the screen either. A number of
+# passes is a fact about the vocabulary above, and one written into a
+# sentence goes stale the day a finger or a grip is added.
+note  = """How far each control is from your finger.
 
-A control you never press in any round is one you take your hand off the
-device to reach. That counts as the furthest anything gets."""
+One finger at a time: press everything it reaches from that grip."""
 
 
 # ------------------------------------------------- every control, side by side

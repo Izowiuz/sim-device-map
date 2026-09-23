@@ -171,11 +171,15 @@ class TheRigOnFile(unittest.TestCase):
                             self.assertIn(spot.get('finger', ''),
                                           ('',) + devicemap.FINGERS)
 
-    def test_everything_you_can_bind_can_be_reached(self):
+    def test_a_control_nobody_has_reached_has_no_tier(self):
+        # Not tier 0, and not the furthest either. Until somebody walks
+        # the fingers there is no answer, and a number here would be one
+        # the solver could not tell from a measured one.
         for dev in devicemap.load_all():
             for g in dev.groups(bindable=True):
-                with self.subTest(dev=dev.slug, ctrl=g.label):
-                    self.assertTrue(g.access)
+                if not g.access:
+                    with self.subTest(dev=dev.slug, ctrl=g.label):
+                        self.assertIsNone(g.tier)
 
     def test_nothing_unwired_pretends_to_be_reachable(self):
         for dev in devicemap.load_all():
@@ -186,38 +190,40 @@ class TheRigOnFile(unittest.TestCase):
                     self.assertEqual([], g.access)
 
 
-class WhereTheRigPutThings(unittest.TestCase):
-    """A snapshot, not a rule.
+class ADeviceOnNoDesk(unittest.TestCase):
+    """A capture read on its own is under no hand and reaches nothing."""
 
-    The migration out of the old `reach` prose claims that no control moved,
-    and the only thing that can catch a silent move is a count taken before
-    and after. S7 splits the nineteen OFF controls into the ones you reach on
-    the device base and the ones you really do take a hand off for, so these
-    numbers are meant to change -- deliberately, and in this file.
+    def test_it_says_so_rather_than_having_no_answer_at_all(self):
+        dev = fake.device(groups=[fake.group('button', [0], id='one')])
+        self.assertEqual('', dev.hand)
+        self.assertIsNone(dev.profile)
+        self.assertFalse(dev.releases_flight)
+
+    def test_its_role_is_what_it_is_until_a_rig_says_otherwise(self):
+        dev = fake.device(kind='throttle')
+        self.assertEqual('throttle', dev.role)
+
+
+class WhatTheRigHasNotBeenTold(unittest.TestCase):
+    """The profile ships with no `access` at all.
+
+    It used to ship with the old `reach` prose migrated into spots, which
+    meant every screen had a third state for "there is data but nobody
+    measured it" -- and the numbers in this file pinned that migration as
+    if it were a measurement. Both are gone.
     """
 
-    def census(self):
-        out = {}
+    def test_the_rig_says_nothing_about_reach_yet(self):
+        for rig in devicemap.load_profiles():
+            for said in rig.devices:
+                with self.subTest(slug=said['slug']):
+                    self.assertFalse(said.get('access'))
+
+    def test_so_no_control_has_a_tier(self):
         for dev in devicemap.load_all():
             for g in dev.groups(bindable=True):
-                out[g.tier] = out.get(g.tier, 0) + 1
-        return out
-
-    def test_the_tiers_are_where_the_old_wording_left_them(self):
-        # thumb and index on the grip: 14.  middle, ring and pinky
-        # stretching for it: 4.  let go of the device: 19.
-        self.assertEqual({0: 14, 1: 4, 3: 19}, self.census())
-
-    def test_the_guessed_ones_are_the_ones_still_to_do(self):
-        # "needs letting go" covered both the device base and taking a hand
-        # off entirely, so all nineteen are marked as what they are.
-        guessed = [g.label for dev in devicemap.load_all()
-                   for g in dev.groups(bindable=True)
-                   if any(a.how == 'guessed' for a in g.access)]
-        self.assertEqual(19, len(guessed))
-        self.assertTrue(all(g.tier == 3 for dev in devicemap.load_all()
-                            for g in dev.groups(bindable=True)
-                            if any(a.how == 'guessed' for a in g.access)))
+                with self.subTest(dev=dev.slug, ctrl=g.label):
+                    self.assertIsNone(g.tier)
 
 
 if __name__ == '__main__':

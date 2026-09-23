@@ -22,17 +22,43 @@ if REPO not in sys.path:
 import devicemap                                            # noqa: E402
 
 
-def group(kind, buttons=(), **kw):
-    """One raw `[[group]]` table."""
-    g = {'kind': kind, 'buttons': list(buttons)}
+def group(kind, buttons=(), names=(), dirs=(), stages=(), push=None,
+          rest_contact=None, travel_contact=None, transient=(), **kw):
+    """One raw `[[group]]` table.
+
+    `buttons` are the positions and the rest are the contacts a control
+    also closes, spelled out here rather than in a nest of dicts: a test
+    saying `push=9` reads as the thing it is describing.
+
+    `dirs` names positions that point somewhere, `stages` and `names` ones
+    that do not. The difference is a `direction` on each state, and it is
+    the only reason the fixture asks which of the three you mean.
+    """
+    latching = kind in devicemap.LATCHING
+    names = list(names or dirs or stages)
+    states = []
+    for n, b in enumerate(buttons):
+        said = names[n] if n < len(names) else ''
+        states.append({'button': b}
+                      | ({'name': said, 'direction': said} if said and dirs
+                         else {'name': said} if said else {})
+                      | ({'latching': True} if latching else {}))
+    for role, b in (('push', push), ('rest', rest_contact),
+                    ('travel', travel_contact)):
+        if b is not None:
+            states.append({'name': role, 'button': b, 'role': role}
+                          | ({'latching': True} if role != 'push' else {}))
+    for b in transient:
+        states.append({'name': 'passing', 'button': b, 'role': 'transient'})
+    g = {'kind': kind, 'states': states}
     g.update({k: v for k, v in kw.items() if v is not None})
     g.setdefault('source', 'measured')
     return g
 
 
 def control(kind, buttons=(), **kw):
-    """A parsed `Group`, whichever shape the dict happens to be in."""
-    return devicemap.Group(**devicemap.upgrade(group(kind, buttons, **kw)))
+    """A parsed `Group`."""
+    return devicemap.Group(**group(kind, buttons, **kw))
 
 
 def axis(index, kind='lever', **kw):
@@ -77,12 +103,8 @@ def _claimed(g):
     fixture working out how big a device has to be, and it must not inherit
     the disagreement between those two that `test_bookkeeping` is about.
     """
-    out = list(g.get('buttons') or [])
-    for k in ('push', 'rest_contact', 'travel_contact'):
-        if g.get(k) is not None:
-            out.append(g[k])
-    out.extend(g.get('transient') or [])
-    return out
+    return [st['button'] for st in g.get('states') or []
+            if st.get('button') is not None]
 
 
 # ----------------------------------------------------------------- screen --
@@ -97,8 +119,11 @@ class Screen:
     which reads as two dialogs open at once.
     """
 
-    def __init__(self, h=14, w=78):
+    def __init__(self, h=14, w=78, keys=()):
         self.h, self.w = h, w
+        #: Keystrokes to hand back, one per `getch`, then nothing forever.
+        #: A screen that never answers leaves an input loop spinning.
+        self.keys = list(keys)
         self.erase()
 
     def getmaxyx(self):
@@ -110,8 +135,8 @@ class Screen:
     def refresh(self):
         pass
 
-    def getch(self):
-        return -1
+    def getch(self) -> int:
+        return self.keys.pop(0) if self.keys else -1
 
     def addstr(self, y, x, text, attr=0):
         for i, ch in enumerate(text):

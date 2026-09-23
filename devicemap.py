@@ -125,13 +125,15 @@ class Spot:
     """Somewhere a control can be reached from, and with what.
 
     A control has a list of these, because most can be reached more than one
-    way and the cheapest way is what decides how far it is. `how` says
-    whether anybody measured it.
+    way and the cheapest way is what decides how far it is.
+
+    There is nothing here saying who said so. Only the wizard writes these,
+    and only from something you pressed: a spot that exists was measured,
+    and a control nobody has reached yet has no spots at all.
     """
     part: str = ''
     level: str = 'HOME'
     finger: str = ''
-    how: str = 'measured'
     #: Filled in from the device this spot belongs to, never written in the
     #: profile: which hand is on a device is said once, per device.
     hand: str = ''
@@ -178,52 +180,6 @@ class State:
     role: str = ''           # one of ROLES; empty means it is a position
     latching: bool = False   # stays here when you let go
     emits_signal: bool = True
-
-
-#: What a control of each shape is taken to be until somebody answers for
-#: it. Every one of these is a guess about a class of thing, not a
-#: measurement of a particular one, and `Group.told` says so. The wizard
-#: fills them in; until it does they are better than nothing and honest
-#: about being worse than an answer.
-#:
-#: `hold_ok` is whether it is comfortable held down for a long time, so
-#: anything sprung says no. `rapid_ok` is repeated clicking, so anything
-#: heavy or detented says no. `modifier_ok` is whether it can carry a shift
-#: layer, which wants something held without thinking about it.
-DEFAULTS = {
-    'button':    dict(hold_ok=True,  rapid_ok=True,  modifier_ok=True,
-                      blind_distinct='low',  accident_risk='low'),
-    'paddle':    dict(hold_ok=True,  rapid_ok=False, modifier_ok=True,
-                      blind_distinct='high', accident_risk='low'),
-    'hat2':      dict(hold_ok=False, rapid_ok=True,  modifier_ok=False,
-                      blind_distinct='high', accident_risk='low'),
-    'hat4':      dict(hold_ok=False, rapid_ok=True,  modifier_ok=False,
-                      blind_distinct='high', accident_risk='low'),
-    'hat8':      dict(hold_ok=False, rapid_ok=True,  modifier_ok=False,
-                      blind_distinct='high', accident_risk='low'),
-    'trigger':   dict(hold_ok=True,  rapid_ok=False, modifier_ok=False,
-                      blind_distinct='high', accident_risk='high'),
-    'latch':     dict(hold_ok=True,  rapid_ok=False, modifier_ok=True,
-                      blind_distinct='high', accident_risk='med'),
-    'switch2':   dict(hold_ok=True,  rapid_ok=False, modifier_ok=True,
-                      blind_distinct='low',  accident_risk='med'),
-    'switch3':   dict(hold_ok=True,  rapid_ok=False, modifier_ok=True,
-                      blind_distinct='low',  accident_risk='med'),
-    'selector':  dict(hold_ok=True,  rapid_ok=False, modifier_ok=True,
-                      blind_distinct='high', accident_risk='low'),
-    'encoder':   dict(hold_ok=False, rapid_ok=True,  modifier_ok=False,
-                      blind_distinct='high', accident_risk='low'),
-    'dial':      dict(hold_ok=False, rapid_ok=False, modifier_ok=False,
-                      blind_distinct='high', accident_risk='low'),
-    'ministick': dict(hold_ok=False, rapid_ok=False, modifier_ok=False,
-                      blind_distinct='high', accident_risk='low'),
-    'lever':     dict(hold_ok=True,  rapid_ok=False, modifier_ok=False,
-                      blind_distinct='high', accident_risk='low'),
-}
-
-#: The ones with no answer at all: nothing is bound to them, so nothing asks.
-NO_FACTS = dict(hold_ok=False, rapid_ok=False, modifier_ok=False,
-                blind_distinct='none', accident_risk='low')
 
 
 @dataclass(frozen=True)
@@ -278,21 +234,21 @@ class Group:
                        for a in self.access]
 
     def fact(self, name):
-        """One ergonomic fact, from the file or from the shape it has.
+        """One ergonomic fact, or None where nobody has answered.
 
-        Asked for by name rather than read as an attribute, because the
-        fallback is the whole point and an attribute would hide it.
+        There used to be a table here of what a control of each shape is
+        taken to be. It answered every question about every control from
+        the day the file was written, which is not the same as knowing,
+        and a screen showing it had to keep explaining that it was not an
+        answer. Nothing now stands in for you.
         """
         got = getattr(self, name)
-        if got is not None and got != '':
-            return got
-        table = DEFAULTS.get(self.kind, {}) if self.bindable else NO_FACTS
-        return table.get(name, NO_FACTS[name])
+        return got if got is not None and got != '' else None
 
     def told(self, name):
-        """Whether somebody answered for this fact, or its shape did."""
+        """Whether somebody answered for this fact."""
         got = getattr(self, name)
-        return 'measured' if got is not None and got != '' else 'guessed'
+        return 'measured' if got is not None and got != '' else 'missing'
 
     @property
     def shape(self):
@@ -434,62 +390,6 @@ def name_ids(groups):
     return groups
 
 
-#: Fields a capture used to carry that say nothing about the hardware.
-#: `reach` was a sentence about the desk, so it moved to the profile; `suits`
-#: was an opinion about what a control is FOR, which is the solver's to have
-#: and not the map's.
-DROPPED = ('reach', 'suits')
-
-
-def upgrade_axis(a):
-    """An axis dict in the shape this module reads now."""
-    return {k: v for k, v in a.items() if k not in DROPPED}
-
-
-def upgrade(g):
-    """A group dict in the shape this module reads now.
-
-    Idempotent, so a file part-way through the migration loads as well as
-    either end of it, and the capture flows can go on building the old shape
-    until they are rewritten.
-
-    Order is the old `all_buttons` order -- positions, click, rest, travel,
-    passing contacts -- because that is what a consumer walking the list
-    already sees.
-    """
-    if 'kind' not in g:
-        return g
-    if 'states' in g:
-        return ({k: v for k, v in g.items() if k not in DROPPED}
-                if any(k in g for k in DROPPED) else g)
-    out = dict(g)
-    dirs = list(g.get('dirs') or [])
-    named = dirs or list(g.get('stages') or g.get('positions') or [])
-    latching = g['kind'] in LATCHING
-    states = []
-    for n, b in enumerate(g.get('buttons') or []):
-        name = named[n] if n < len(named) else ''
-        # Only what is not the default: a state carrying every field it
-        # could have is unreadable, and a default written down is a default
-        # somebody has to keep in step by hand.
-        states.append({'button': b}
-                      | ({'name': name, 'direction': name} if dirs
-                         else {'name': name} if name else {})
-                      | ({'latching': True} if latching else {}))
-    for role, key in (('push', 'push'), ('rest', 'rest_contact'),
-                      ('travel', 'travel_contact')):
-        if g.get(key) is not None:
-            states.append({'name': role, 'button': g[key], 'role': role}
-                          | ({'latching': True} if role != 'push' else {}))
-    for b in g.get('transient') or []:
-        states.append({'name': 'passing', 'button': b, 'role': 'transient'})
-    for dead in ('buttons', 'dirs', 'stages', 'positions', 'push',
-                 'rest_contact', 'travel_contact', 'transient') + DROPPED:
-        out.pop(dead, None)
-    out['states'] = states
-    return out
-
-
 class Device:
     def __init__(self, data, path):
         self.path = path
@@ -501,22 +401,22 @@ class Device:
         self.kind = d.get('kind', '')
         self.n_buttons = d.get('buttons', 0)
         self.n_axes = d.get('axes', 0)
-        ident = data.get('identity', {})
-        if isinstance(ident, dict):         # the original single-table form
-            ident = [ident] if ident else []
-        self.identities = [dict(i) for i in ident]
+        self.identities = [dict(i) for i in data.get('identity', [])]
         first = self.identities[0] if self.identities else {}
         self.usb = first.get('usb', '').lower()
         self.serial = first.get('serial', '')
         self.evdev_name = first.get('evdev', '')
         self.game_ids = first.get('games', {})
         self.fingerprint = data.get('fingerprint', {})
-        data['axis'] = [upgrade_axis(a) for a in data.get('axis', [])]
-        self._axes = [Axis(**a) for a in data['axis']]
-        # Upgraded in place, so there is one shape in memory whatever the
-        # file on disk still says.
-        data['group'] = [upgrade(g) for g in data.get('group', [])]
-        self._groups = [Group(**g) for g in data['group']]
+        self._axes = [Axis(**a) for a in data.get('axis', [])]
+        self._groups = [Group(**g) for g in data.get('group', [])]
+        # What a rig would say about it, until one does. A device on no
+        # desk is under no hand, and the alternative is that every reader
+        # has to know whether `under` has been called yet.
+        self.profile = None
+        self.hand = ''
+        self.role = self.kind
+        self.releases_flight = False
 
     def under(self, prof):
         """Lay a rig over this device: which hand, and what reaches what.

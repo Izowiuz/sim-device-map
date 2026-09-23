@@ -295,9 +295,9 @@ class TheFiveFacts(unittest.TestCase):
         self.assertLess(len(self.asks),
                         len(self.dev.groups(bindable=True)) * len(self.asks))
 
-    def test_a_row_says_how_many_are_still_guessed(self):
+    def test_a_row_says_how_many_are_still_to_answer(self):
         rows = screens.fact_rows(self.dev, self.asks)
-        left = screens._still_guessed(self.dev, self.asks[0])
+        left = screens._left_to_answer(self.dev, self.asks[0])
         self.assertIn(str(left), rows[0][1])
 
     def test_the_counts_line_up(self):
@@ -326,7 +326,7 @@ class TheFiveFacts(unittest.TestCase):
         # every time the prose gets better, which is most of the time.
         head, said = screens.fact_side(self.dev, self.asks, 0)
         shown = '\n'.join(t for _tone, t in said)
-        left = screens._still_guessed(self.dev, self.asks[0])
+        left = screens._left_to_answer(self.dev, self.asks[0])
         self.assertEqual(screens.caption(self.asks[0]), head)
         self.assertIn(self.asks[0].says, shown)
         self.assertIn(str(left), shown)
@@ -360,21 +360,56 @@ class AnsweringOneFact(unittest.TestCase):
     def test_a_yes_and_a_no_do_not_read_alike(self):
         self.assertNotEqual(screens.SAID[True], screens.SAID[False])
 
+    def test_a_row_says_the_answer_and_what_it_is_about_and_no_more(self):
+        # How far away the control is used to ride along here. It is true
+        # and beside the point: the question is about the feel of the
+        # thing under your finger, and it was a column to read past on
+        # every row of twenty-six.
+        for ask in self.sheet.of(q.ALL):
+            rows = screens.answer_rows(self.dev, ask, self.ctrls)
+            for g, (_tone, text) in zip(self.ctrls, rows):
+                got = g.fact(ask.sets)
+                mark = ('' if got is None
+                        else screens.SAID[got] if isinstance(got, bool)
+                        else str(got))
+                with self.subTest(ctrl=g.id, ask=ask.id):
+                    self.assertEqual(
+                        mark, text.replace(g.label or g.kind, '').strip())
+
     def test_a_row_shows_a_mark_and_not_python(self):
-        rows = screens.answer_rows(self.dev, self.ask('hold_ok'), self.ctrls)
+        ask = self.ask('hold_ok')
+        one = self.ctrls[0]
+        one.hold_ok = True
+        try:
+            rows = screens.answer_rows(self.dev, ask, self.ctrls)
+        finally:
+            one.hold_ok = None
         shown = '\n'.join(t for _tone, t in rows)
         self.assertNotIn('True', shown)
         self.assertNotIn('False', shown)
         self.assertIn(screens.SAID[True], shown)
 
+    def test_a_control_nobody_answered_for_is_left_blank(self):
+        # Blank, not a no: those are different, and a mark for one of
+        # them standing in for the other is the whole reason the table of
+        # what a shape usually is had to go.
+        rows = screens.answer_rows(self.dev, self.ask('hold_ok'), self.ctrls)
+        for g, (_tone, text) in zip(self.ctrls, rows):
+            if g.told('hold_ok') == 'missing':
+                with self.subTest(ctrl=g.id):
+                    self.assertNotIn(screens.SAID[True], text)
+                    self.assertNotIn(screens.SAID[False], text)
+
     def test_a_three_step_row_shows_the_value_it_has(self):
-        rows = screens.answer_rows(self.dev, self.ask('blind_distinct'),
-                                   self.ctrls)
-        names = {c['name'] for c
-                 in self.sheet.choices(self.ask('blind_distinct'))}
-        for tone, text in rows:
-            with self.subTest(text=text):
-                self.assertTrue(any(text.startswith(n) for n in names), text)
+        ask = self.ask('blind_distinct')
+        names = [c['name'] for c in self.sheet.choices(ask)]
+        one = self.ctrls[0]
+        one.blind_distinct = names[0]
+        try:
+            (_tone, text), *_ = screens.answer_rows(self.dev, ask, self.ctrls)
+        finally:
+            one.blind_distinct = ''
+        self.assertTrue(text.startswith(names[0]), text)
 
     def test_an_answer_reads_as_a_word_and_not_as_python(self):
         _head, said = screens.answer_side(self.dev, self.ask('hold_ok'),
@@ -403,10 +438,13 @@ class AnsweringOneFact(unittest.TestCase):
         self.assertNotIn('tier', ' '.join(shown))
         self.assertNotIn('position', ' '.join(shown))
 
-    def test_a_guess_says_it_is_one(self):
-        _head, said = screens.answer_side(self.dev, self.ask('hold_ok'),
-                                          self.ctrls, 0)
-        self.assertIn('a guess', '\n'.join(t for _tone, t in said))
+    def test_no_answer_says_so_rather_than_showing_one(self):
+        ask = self.ask('hold_ok')
+        self.assertEqual('missing', self.ctrls[0].told(ask.sets))
+        _head, said = screens.answer_side(self.dev, ask, self.ctrls, 0)
+        shown = '\n'.join(t for _tone, t in said)
+        self.assertNotIn('yes', shown.split(ask.says)[0])
+        self.assertIn('no answer', shown)
 
     def test_the_control_comes_before_the_question(self):
         # The title already names it; what you want next is its answer,
@@ -416,8 +454,7 @@ class AnsweringOneFact(unittest.TestCase):
         shown = [t for _tone, t in said]
         self.assertEqual(self.ctrls[0].label, head)
         self.assertLess(shown.index(screens._answer_said(
-            self.ctrls[0].fact(ask.sets)) + '   (a guess)'),
-            shown.index(ask.says))
+            self.ctrls[0].fact(ask.sets))), shown.index(ask.says))
 
     def test_it_does_not_repeat_what_the_border_says(self):
         # The keys are in the sill. Saying them again costs two rows of
@@ -429,6 +466,198 @@ class AnsweringOneFact(unittest.TestCase):
         self.assertNotIn('Press it', shown)
 
 
+class EveryRowFitsThePanelItIsIn(unittest.TestCase):
+    """`browse` cuts a row at the panel edge without a word about it.
+
+    The lid does the same with a title, and that one was caught by
+    reading the screen. A row is cut mid-word instead -- "26 with no
+    answe" -- which reads as something broken rather than something
+    shortened, and the tail is where these rows say how much is left.
+    """
+
+    def setUp(self):
+        self.sheet = q.read()
+        self.dev = devicemap.load_all()[0]
+        scr = fake.Screen(16, 80)
+        t = ui.Tui(scr, ui.Theme(False))
+        (_ly, lx, _lh, lw), _right = t.halves(*scr.getmaxyx())
+        self.room = ui.text_in(lx, lw)[1]
+
+    def fits(self, rows):
+        for _tone, text in rows:
+            with self.subTest(row=text):
+                self.assertLessEqual(len(text), self.room)
+
+    def test_every_control_on_the_main_list(self):
+        # A full-width box rather than a panel, so its own width, and it
+        # is the row with the most columns on it.
+        rows = screens.control_rows(self.dev)
+        body = [r.text for r in rows]
+        _y, x, _h, bw = ui.box_for(body, 24, 80, self.dev.product, True)
+        room = ui.text_in(x, bw)[1]
+        for text in body:
+            with self.subTest(row=text):
+                self.assertLessEqual(len(text), room)
+
+    def test_the_five_facts(self):
+        self.fits(screens.fact_rows(self.dev, self.sheet.of(q.ALL)))
+
+    def test_every_control_under_one_fact(self):
+        controls = [g for g in self.dev.groups(bindable=True) if g.id]
+        for ask in self.sheet.of(q.ALL):
+            self.fits(screens.answer_rows(self.dev, ask, controls))
+
+    def test_the_fingers_and_their_grips(self):
+        prof = devicemap.profile()
+        assert prof is not None
+        self.fits(screens.reach_rows(screens.reach_rounds(
+            self.dev, prof, self.sheet.vocabulary['level'])))
+
+
+class ThePickerAtTheDoor(unittest.TestCase):
+    """Which device, and how far each has got.
+
+    It used to count buttons the file had heard of, which on both of
+    these is every button there is -- so it said 51/51 described about a
+    device with not one answer given.
+    """
+
+    class Plugged:
+        def __init__(self, dev, ok=True, status='exact'):
+            self.device, self.ok, self.status = dev, ok, status
+
+        def explain(self):
+            return 'nothing in the map looks like this'
+
+    def setUp(self):
+        self.found = [self.Plugged(d) for d in devicemap.load_all()]
+
+    def test_it_counts_what_is_answered_and_not_what_is_wired(self):
+        for m, (_tone, text) in zip(self.found,
+                                    screens.found_rows(self.found)):
+            done, total = screens.described(m.device)
+            with self.subTest(dev=m.device.slug):
+                self.assertFalse(m.device.unknown()[0])
+                self.assertIn(f'{done}/{total}', text)
+                self.assertNotIn(f'{m.device.n_buttons}/'
+                                 f'{m.device.n_buttons}', text)
+
+    def test_a_device_nobody_has_touched_counts_its_buttons(self):
+        # Controls are made by pressing buttons, so a fresh device has
+        # none of them -- and a ratio of them is 0 of 0, which reads as
+        # finished. Buttons come from the firmware and are there at once.
+        fresh = fake.device(groups=[fake.group('unknown', [0, 1, 2, 3])])
+        (tone, text), = screens.found_rows([self.Plugged(fresh)])
+        self.assertIn('4 buttons', text)
+        self.assertNotIn('0/0', text)
+        self.assertNotEqual(screens.TONE['measured'], tone)
+
+    def test_and_says_so_in_the_hint_as_well(self):
+        fresh = fake.device(groups=[fake.group('unknown', [0, 1, 2, 3])])
+        said = ' '.join(screens.found_hints(self.Plugged(fresh)))
+        self.assertIn('4 buttons', said)
+
+    def test_a_device_with_no_buttons_at_all_is_not_called_finished(self):
+        # Nothing to sort and nothing to answer, which is not the same
+        # as done: it is a device the map knows nothing about.
+        (tone, text), = screens.found_rows(
+            [self.Plugged(fake.device(groups=[]))])
+        self.assertNotEqual(screens.TONE['measured'], tone)
+        self.assertTrue(text.strip())
+
+    def test_a_fresh_device_is_not_called_finished(self):
+        # It has no controls, so there is nothing to be outstanding
+        # about -- which is the same trap the ratio fell into.
+        fresh = fake.device(groups=[fake.group('unknown', [0, 1, 2, 3])])
+        said = ' '.join(screens.found_hints(self.Plugged(fresh))).lower()
+        self.assertNotIn('nothing outstanding', said)
+
+    def test_a_device_with_nothing_left_says_so(self):
+        done = fake.device(groups=[fake.group(
+            'button', [0], label='One', id='one', hold_ok=True,
+            rapid_ok=True, modifier_ok=True, blind_distinct='high',
+            accident_risk='low')])
+        done.under(devicemap.Profile({'name': 'x', 'device': [{
+            'slug': done.slug, 'hand': 'left',
+            'access': {'one': [{'part': 'stick', 'level': 'HOME',
+                                'finger': 'thumb'}]}}]}, '<test>'))
+        said = ' '.join(screens.found_hints(self.Plugged(done))).lower()
+        self.assertIn('nothing outstanding', said)
+
+    def test_buttons_first_and_answers_after(self):
+        # One job at a time: sorting the buttons into controls comes
+        # before anything can be asked about a control.
+        half = fake.device(groups=[fake.group('unknown', [0]),
+                                   fake.group('button', [1], label='One',
+                                              id='one')])
+        (_tone, text), = screens.found_rows([self.Plugged(half)])
+        self.assertIn('1 button', text)
+        self.assertNotIn('controls', text)
+
+    def test_a_device_with_nothing_answered_does_not_look_finished(self):
+        for m, (tone, _text) in zip(self.found,
+                                    screens.found_rows(self.found)):
+            done, _total = screens.described(m.device)
+            if not done:
+                with self.subTest(dev=m.device.slug):
+                    self.assertNotEqual(screens.TONE['measured'], tone)
+
+    def test_a_row_fits_the_dialog(self):
+        room = ui.text_in(0, ui.DIALOG)[1]
+        for _tone, text in screens.found_rows(self.found):
+            with self.subTest(row=text):
+                self.assertLessEqual(len(text), room)
+
+    def test_a_device_that_did_not_match_says_why(self):
+        odd = self.Plugged(devicemap.load_all()[0], ok=False, status='drift')
+        self.assertIn(odd.explain(), screens.found_hints(odd))
+        self.assertNotIn(odd.explain(),
+                         screens.found_hints(self.found[0]))
+
+    def test_the_hint_says_what_is_outstanding(self):
+        said = ' '.join(screens.found_hints(self.found[0]))
+        dev = self.found[0].device
+        blank = sum(1 for g in dev.groups(bindable=True) if not g.access)
+        self.assertIn(str(blank), said)
+
+
+class WhatARowSaysAControlHas(unittest.TestCase):
+    """A dial and a mini-stick report an axis and have no positions."""
+
+    def setUp(self):
+        self.dev = devicemap.load_all()[0]
+
+    def test_a_control_with_only_axes_is_not_empty(self):
+        for g in self.dev.groups(bindable=True):
+            if g.axes and not g.places:
+                with self.subTest(ctrl=g.id):
+                    said = screens._owns(g)
+                    self.assertIn('axis' if len(g.axes) == 1 else 'axes',
+                                  said)
+                    self.assertNotIn('0', said)
+
+    def test_a_control_with_positions_counts_them(self):
+        for g in self.dev.groups(bindable=True):
+            if g.places:
+                with self.subTest(ctrl=g.id):
+                    self.assertIn(ui.plural(len(g.places), 'position'),
+                                  screens._owns(g))
+
+    def test_a_control_with_only_a_click_says_so(self):
+        # Otherwise its row says nothing at all about what is on it.
+        for g in self.dev.groups(bindable=True):
+            if g.push is not None and not g.places:
+                with self.subTest(ctrl=g.id):
+                    self.assertIn('click', screens._owns(g))
+
+    def test_a_pile_of_buttons_is_counted_in_buttons(self):
+        for g in self.dev.groups():
+            if not g.bindable and g.all_buttons:
+                with self.subTest(kind=g.kind):
+                    self.assertIn('button', screens._owns(g))
+                    self.assertNotIn('position', screens._owns(g))
+
+
 class TheReachRounds(unittest.TestCase):
     """Fifteen rounds for a whole device, not fifteen per control -- and
     a list of them rather than fifteen screens in a row, because a row of
@@ -437,9 +666,16 @@ class TheReachRounds(unittest.TestCase):
     def setUp(self):
         self.sheet = q.read()
         self.dev = devicemap.load_all()[0]
-        self.prof = devicemap.profile()
+        prof = devicemap.profile()
+        assert prof is not None
+        self.prof = prof
         self.rounds = screens.reach_rounds(self.dev, self.prof,
                                            self.sheet.vocabulary['level'])
+
+    def walked(self, found=(), done=True):
+        """One posture's worth of rounds, the thumb's holding `found`."""
+        lvl = self.sheet.vocabulary['level'][0]
+        return [screens.Round(lvl, 'thumb', list(found), done)]
 
     def test_one_round_per_posture_and_finger(self):
         want = len(self.sheet.vocabulary['level']) * len(devicemap.FINGERS)
@@ -452,30 +688,168 @@ class TheReachRounds(unittest.TestCase):
                         len(self.dev.groups(bindable=True)))
 
     def test_a_round_that_found_something_says_how_much(self):
-        one = next(r for r in self.rounds if r.found)
-        rows = screens.reach_rows(self.rounds)
-        said = '\n'.join(t for _tone, t in rows)
-        self.assertIn(one.finger, said)
-        self.assertIn(ui.plural(len(one.found), 'control'), said)
+        rounds = self.walked(['a', 'b'])
+        said = '\n'.join(t for _tone, t in screens.reach_rows(rounds))
+        self.assertIn('thumb', said)
+        self.assertIn(ui.plural(2, 'control'), said)
+
+    def test_a_round_nobody_has_walked_says_so(self):
+        said = '\n'.join(t for _tone, t in
+                         screens.reach_rows(self.walked(done=False)))
+        self.assertIn('not done yet', said)
+
+    def test_a_round_that_reached_nothing_is_not_one_left_to_do(self):
+        # Both list no controls, so the words are the whole difference.
+        (_tone, a), = [r for r in screens.reach_rows(self.walked(done=True))
+                       if r[0] != 'subhead']
+        (_tone, b), = [r for r in screens.reach_rows(self.walked(done=False))
+                       if r[0] != 'subhead']
+        self.assertNotEqual(a, b)
 
     def test_a_posture_heads_its_own_fingers(self):
         rows = screens.reach_rows(self.rounds)
         heads = [t for tone, t in rows if tone == 'subhead']
-        self.assertEqual([c['says'] for c in self.sheet.vocabulary['level']],
-                         heads)
+        self.assertEqual([c['says'].lower()
+                          for c in self.sheet.vocabulary['level']],
+                         [t.lower() for t in heads])
+
+    def test_a_heading_starts_like_a_sentence(self):
+        # The same words read mid-sentence on the other half of the
+        # screen ("thumb, in the normal grip"); as a heading they start.
+        for tone, t in screens.reach_rows(self.rounds):
+            if tone == 'subhead':
+                with self.subTest(head=t):
+                    self.assertEqual(t[:1], t[:1].upper())
+
+    def test_a_row_does_not_mark_what_its_own_words_already_say(self):
+        for tone, t in screens.reach_rows(self.rounds):
+            if tone != 'subhead':
+                with self.subTest(row=t):
+                    self.assertNotIn(screens.MARK['measured'], t)
+                    self.assertNotIn(screens.MARK['guessed'], t)
+
+    def test_return_on_a_heading_goes_to_a_round_worth_doing(self):
+        rows = screens.reach_rows(self.rounds)
+        heads = [n for n in range(len(rows))
+                 if screens._round_at(self.rounds, n) is None]
+        for n in heads:
+            with self.subTest(row=n):
+                to = screens.next_round_at(self.rounds, n)
+                one = screens._round_at(self.rounds, to)
+                assert one is not None
+                mine = [r for r in self.rounds
+                        if r.level['name'] == one.level['name']]
+                self.assertIn(one, mine)
+                if any(not r.done for r in mine):
+                    self.assertFalse(one.done)
+
+    def test_a_round_row_stays_where_it_is(self):
+        rows = screens.reach_rows(self.rounds)
+        for n in range(len(rows)):
+            if screens._round_at(self.rounds, n) is not None:
+                with self.subTest(row=n):
+                    self.assertEqual(n, screens.next_round_at(self.rounds, n))
+
+    def test_a_round_is_done_only_once_somebody_has_walked_it(self):
+        # Walked, and nothing else. `access` alone cannot say it: the
+        # wizard writes spots for a finger and the walk it came from in
+        # the same breath, and a hand-edited file says nothing about who
+        # pressed what.
+        said = dict(self.prof.entry(self.dev.slug) or {})
+        one = next(g for g in self.dev.groups(bindable=True) if g.id)
+        lvl = self.sheet.vocabulary['level'][0]
+        said['access'] = {one.id: [{'part': self.dev.kind,
+                                    'level': lvl['name'],
+                                    'finger': 'thumb'}]}
+        rig = devicemap.Profile({'name': 'x', 'device': [said]}, '<test>')
+        rounds = screens.reach_rounds(self.dev, rig,
+                                      self.sheet.vocabulary['level'])
+        got = next(r for r in rounds
+                   if r.finger == 'thumb' and r.level is lvl)
+        self.assertEqual([one.id], got.found)
+        self.assertFalse(got.done)
+
+        said['rounds'] = [[lvl['name'], 'thumb']]
+        rig = devicemap.Profile({'name': 'x', 'device': [said]}, '<test>')
+        rounds = screens.reach_rounds(self.dev, rig,
+                                      self.sheet.vocabulary['level'])
+        self.assertTrue(next(r for r in rounds if r.finger == 'thumb'
+                             and r.level is lvl).done)
+
+    def test_a_long_round_does_not_run_off_the_panel(self):
+        lvl = self.sheet.vocabulary['level'][0]
+        every = [g.id for g in self.dev.groups(bindable=True) if g.id]
+        self.assertGreater(len(every), screens.SHOWN)
+        _h, said = screens.reach_side(
+            self.dev, [screens.Round(lvl, 'thumb', every, True)], 1, [])
+        shown = [t for _tone, t in said]
+        self.assertTrue(any(f'{len(every) - screens.SHOWN} more' in t
+                            for t in shown))
+
+    def test_nothing_on_screen_calls_it_a_round(self):
+        # A word for the thing that appears nowhere else on the screen:
+        # the list says grips and fingers, and the screen has to say the
+        # same. Twice reported as not understood.
+        note = screens.note_lines(self.sheet.of(q.DEVICE)[0])
+        said = list(note)
+        for n in range(len(screens.reach_rows(self.rounds))):
+            head, rows = screens.reach_side(self.dev, self.rounds, n, note)
+            said += [head] + [t for _tone, t in rows]
+        said += [t for _tone, t in screens.reach_rows(self.rounds)]
+        for one in self.rounds:
+            title, aside, says = screens.round_prompt(one)
+            said += [title, says] + list(aside)
+        for t in said:
+            with self.subTest(said=t):
+                self.assertNotRegex(t.lower(), r'\bround')
+
+    def test_every_panel_title_fits_the_panel(self):
+        # `lid` drops what will not fit, so a title too long for the
+        # narrowest panel is a title nobody ever reads in full -- and the
+        # longest ones, which need reading most, are the ones that go.
+        scr = fake.Screen(16, 80)
+        t = ui.Tui(scr, ui.Theme(False))
+        (_, _, _, _), (_ry, _rx, _rh, rw) = t.halves(*scr.getmaxyx())
+        rows = screens.reach_rows(self.rounds)
+        for n in range(len(rows)):
+            head, _said = screens.reach_side(self.dev, self.rounds, n, [])
+            with self.subTest(head=head):
+                self.assertIn(head, ui.lid(rw, head))
+
+    def test_the_panel_says_what_it_says_inside_the_panel(self):
+        # `browse` truncates the detail panel at its last row without a
+        # word about it, so anything past that row is written and never
+        # read. The explanation of the whole screen lives there.
+        scr = fake.Screen(16, 80)
+        t = ui.Tui(scr, ui.Theme(False))
+        (_ly, _lx, _lw, _l), (_ry, _rx, rh, rw) = t.halves(*scr.getmaxyx())
+        _at, room = ui.text_in(_rx, rw)
+        note = screens.note_lines(self.sheet.of(q.DEVICE)[0])
+        for n in range(len(screens.reach_rows(self.rounds))):
+            _head, said = screens.reach_side(self.dev, self.rounds, n, note)
+            wrapped = [f for _tone, t2 in said for f in ui.fit(room, t2)]
+            with self.subTest(row=n):
+                self.assertLessEqual(len(wrapped), rh - 2)
+
+    def test_a_round_panel_says_which_posture_it_is(self):
+        rows = screens.reach_rows(self.rounds)
+        n = next(n for n in range(len(rows))
+                 if screens._round_at(self.rounds, n) is not None)
+        one = screens._round_at(self.rounds, n)
+        assert one is not None
+        head, said = screens.reach_side(self.dev, self.rounds, n, [])
+        self.assertIn(screens.finger_said(one.finger), head)
+        shown = ' '.join(t for _tone, t in said).lower()
+        self.assertIn(one.level['says'].lower(), shown)
 
     def test_the_side_names_controls_and_not_their_ids(self):
-        at = next(n for n in range(len(screens.reach_rows(self.rounds)))
-                  if (screens._round_at(self.rounds, n) or
-                      screens.Round({}, '', [], False)).found)
-        _head, said = screens.reach_side(self.dev, self.rounds, at, [])
+        one = next(g for g in self.dev.groups(bindable=True)
+                   if g.id and g.label)
+        _head, said = screens.reach_side(self.dev, self.walked([one.id]),
+                                         1, [])
         shown = '\n'.join(t for _tone, t in said)
-        for g in self.dev.groups(bindable=True):
-            if g.id in (screens._round_at(self.rounds, at) or
-                        screens.Round({}, '', [], False)).found:
-                with self.subTest(ctrl=g.id):
-                    self.assertIn(g.label, shown)
-                    self.assertNotIn(g.id, shown)
+        self.assertIn(one.label, shown)
+        self.assertNotIn(one.id, shown)
 
     def test_a_posture_row_explains_the_whole_thing(self):
         head, said = screens.reach_side(self.dev, self.rounds, 0,

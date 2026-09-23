@@ -237,6 +237,21 @@ class WhatIsLeftUnderABox(unittest.TestCase):
         self.assertNotIn('which one', got)
         self.assertNotIn('a question', got)
 
+    def test_a_dialog_sits_on_the_screen_it_was_opened_from(self):
+        # Two panels are also something you open a dialog from, and what
+        # came before them is not what you are looking at.
+        scr = fake.Screen(16, 80, keys=[27])
+        t = tui.Tui(scr, tui.Theme(False))
+        t.box('device', [('plain', f'control {i}') for i in range(8)],
+              full=True)
+        t.browse('reach', [('plain', 'in the grip'), ('plain', 'thumb')],
+                 lambda n: ('thumb', [('plain', 'press it')]))
+        t.box('press what it reaches', [('plain', 'then RETURN')])
+        got = scr.text()
+        self.assertIn('then RETURN', got)
+        self.assertIn('in the grip', got)
+        self.assertNotIn('control 0', got)
+
     def test_the_backdrop_is_not_cut_mid_word(self):
         # The list behind runs up to the frame otherwise, and half a word
         # beside a border reads as something broken rather than behind.
@@ -367,3 +382,25 @@ class Tones(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class WhatTheDetailPanelCounts(unittest.TestCase):
+    """The panel's edge counts rows by default, and a list with headings
+    in it has more rows than things."""
+
+    def browse(self, **kw):
+        scr = fake.Screen(14, 80, keys=[27])     # ESC: one draw and out
+        t = tui.Tui(scr, tui.Theme(False))
+        t.browse('list', [('plain', 'one'), ('plain', 'two')],
+                 lambda n: ('side', [('plain', 'what')]), **kw)
+        return scr.text()
+
+    def test_by_default_it_counts_the_rows(self):
+        self.assertIn('1 of 2', self.browse())
+
+    def test_what_it_counts_can_be_said_by_the_caller(self):
+        self.assertIn('round 4', self.browse(count=lambda n: 'round 4'))
+
+    def test_a_caller_can_have_it_count_nothing(self):
+        said = self.browse(count=lambda n: '')
+        self.assertIn('side', said)
+        self.assertNotIn('1 of 2', said)

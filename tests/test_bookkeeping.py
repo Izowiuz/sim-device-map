@@ -23,7 +23,7 @@ class WhatAGroupOwns(unittest.TestCase):
     def both(self, g):
         """(raw answer, parsed answer) for one group dict."""
         return (sorted(capture.all_of(g)),
-                sorted(devicemap.Group(**devicemap.upgrade(g)).all_buttons))
+                sorted(devicemap.Group(**g).all_buttons))
 
     def test_plain_buttons(self):
         raw, parsed = self.both(fake.group('hat4', [4, 5, 6, 7]))
@@ -92,48 +92,53 @@ class ReorderingAControl(unittest.TestCase):
         self.assertTrue(all(st.latching
                             for st in devicemap.Group(**g).places))
 
-    def test_nothing_of_the_old_shape_is_left_behind(self):
-        # `Group` takes its fields by keyword, so a dict carrying both
-        # shapes does not load at all.
-        g = fake.group('hat4', [4, 5, 6, 7], push=3,
-                       dirs=['up', 'right', 'down', 'left'])
-        capture.set_buttons(g, [4, 5, 6, 7], ['up', 'right', 'down', 'left'])
-        self.assertEqual([], [k for k in ('buttons', 'dirs', 'stages',
-                                          'positions', 'push') if k in g])
+class TheShapeOfAControl(unittest.TestCase):
+    """`states_of` is the only place that says what a position looks like.
 
-
-class ACaptureFromBefore(unittest.TestCase):
-    """An old file still on somebody's disk has to load.
-
-    `reach` was a sentence about the desk and moved to the profile; `suits`
-    was an opinion about what a control is FOR, which belongs to whatever is
-    choosing bindings and never to the map. Both have to come off on the way
-    in, because `Group` takes its fields by keyword and an unexpected one
-    stops the file loading at all.
+    It used to be two: the wizard built one shape and a converter folded
+    it into another. These are the rules that converter was holding.
     """
 
-    def test_it_loads_and_the_dead_fields_do_not_come_back(self):
-        g = fake.group('hat4', [4, 5, 6, 7], push=3,
-                       dirs=['up', 'right', 'down', 'left'],
-                       reach='thumb, without releasing grip',
-                       suits=['view', 'trim'])
-        got = devicemap.Group(**devicemap.upgrade(g))
-        self.assertEqual([4, 5, 6, 7], got.buttons)
-        self.assertFalse(hasattr(got, 'reach'))
-        self.assertFalse(hasattr(got, 'suits'))
+    def test_a_contact_a_control_holds_is_written_as_held(self):
+        got = capture.states_of('trigger', [2, 3], ['first', 'second'],
+                                contacts=[('rest', 9), ('travel', 10)])
+        held = {st['button']: st.get('latching') for st in got}
+        self.assertTrue(held[9])
+        self.assertTrue(held[10])
 
-    def test_an_axis_from_before_loads_too(self):
-        a = fake.axis(3, 'lever', label='Left throttle lever',
-                      suits=['throttle', 'collective'])
-        got = devicemap.Axis(**devicemap.upgrade_axis(a))
-        self.assertEqual('Left throttle lever', got.label)
-        self.assertFalse(hasattr(got, 'suits'))
+    def test_a_click_is_not_held(self):
+        got, = capture.states_of('hat4', [], contacts=[('push', 9)])
+        self.assertFalse(got.get('latching'))
 
-    def test_a_file_already_migrated_is_left_alone(self):
-        g = fake.group('hat4', [4, 5, 6, 7], push=3,
-                       dirs=['up', 'right', 'down', 'left'])
-        once = devicemap.upgrade(g)
-        self.assertEqual(once, devicemap.upgrade(dict(once)))
+    def test_a_switch_that_stays_put_holds_every_position(self):
+        got = capture.states_of('switch2', [4, 5])
+        self.assertTrue(all(st.get('latching') for st in got))
+
+    def test_a_direction_is_a_name_that_points_somewhere(self):
+        got = capture.states_of('hat4', [4, 5], ['up', 'right'],
+                                directional=True)
+        self.assertEqual(['up', 'right'], [st['direction'] for st in got])
+        self.assertEqual(['up', 'right'], [st['name'] for st in got])
+
+    def test_a_stage_is_a_name_that_does_not(self):
+        got = capture.states_of('trigger', [2, 3], ['first', 'second'])
+        self.assertEqual(['first', 'second'], [st['name'] for st in got])
+        self.assertTrue(all('direction' not in st for st in got))
+
+    def test_the_positions_come_before_what_else_it_closes(self):
+        got = capture.states_of('trigger', [2, 3], contacts=[('rest', 9)])
+        self.assertEqual([2, 3, 9], [st['button'] for st in got])
+
+    def test_a_reorder_does_not_hand_a_trigger_directions(self):
+        g = fake.group('trigger', [2, 3], stages=['first', 'second'])
+        capture.set_buttons(g, [3, 2], ['first', 'second'])
+        self.assertTrue(all('direction' not in st for st in g['states']))
+
+    def test_a_reorder_keeps_a_hat_pointing(self):
+        g = fake.group('hat2', [4, 5], dirs=['up', 'down'])
+        capture.set_buttons(g, [5, 4], ['down', 'up'])
+        self.assertEqual(['down', 'up'],
+                         [st['direction'] for st in g['states']])
 
 
 class TheUnknownBucket(unittest.TestCase):

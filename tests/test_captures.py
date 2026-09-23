@@ -167,9 +167,7 @@ def _normal(data):
         'fingerprint': data.get('fingerprint'),
         'axis': sorted((_sorted_lists(a) for a in data.get('axis', [])),
                        key=lambda a: a['index']),
-        # Upgraded on both sides: the point is that no fact was lost, not
-        # that it is still filed under the name it had in 2026.
-        'group': sorted((_sorted_states(devicemap.upgrade(g))
+        'group': sorted((_sorted_states(g)
                          for g in data.get('group', [])),
                         key=lambda g: (g.get('label', ''), g['kind'])),
     }

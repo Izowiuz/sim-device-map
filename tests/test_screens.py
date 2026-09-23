@@ -12,6 +12,7 @@ start over -- and a trail that silently stops at four boxes has lost three.
 import re
 import unittest
 
+import capture
 import devicemap
 import fake
 import questions as q
@@ -1069,3 +1070,75 @@ class SayingWhatWentAway(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TheLiveTrace(unittest.TestCase):
+    """Events as they happen, with the map's own names on them."""
+
+    def setUp(self):
+        self.dev = devicemap.load_all()[0]
+        self.events = [(1.00, 'button', 0, 1), (1.20, 'button', 0, 0),
+                       (2.00, 'axis', 0, 12000)]
+
+    def test_one_row_per_event(self):
+        self.assertEqual(len(self.events),
+                         len(screens.trace_rows(self.dev, self.events)))
+
+    def test_it_says_what_the_map_calls_the_thing(self):
+        said = '\n'.join(t for _tone, t in
+                         screens.trace_rows(self.dev, self.events))
+        self.assertIn(self.dev.button_label(0), said)
+
+    def test_a_press_and_a_release_do_not_read_alike(self):
+        rows = screens.trace_rows(self.dev, self.events)
+        self.assertNotEqual(rows[0][1], rows[1][1])
+
+    def test_it_says_how_long_since_the_one_before(self):
+        # Most of the answer is in the gap: a lever's own switch trips
+        # within a moment of the travel, a second press never does.
+        said = '\n'.join(t for _tone, t in
+                         screens.trace_rows(self.dev, self.events))
+        self.assertIn('0.20', said)
+
+    def test_the_first_event_has_nothing_to_be_after(self):
+        rows = screens.trace_rows(self.dev, self.events)
+        self.assertNotIn('+', rows[-1][1])
+
+    def test_a_long_trace_is_cut_to_what_fits_keeping_the_newest(self):
+        many = [(float(n), 'button', 0, 1) for n in range(50)]
+        rows = screens.trace_rows(self.dev, many, room=5)
+        self.assertEqual(5, len(rows))
+        self.assertIn(' 49.00', rows[0][1])
+
+    def test_the_newest_is_at_the_top(self):
+        # Where your eye already is, and the rows that fall off the
+        # bottom are then the ones you have stopped caring about.
+        rows = screens.trace_rows(self.dev, self.events)
+        self.assertIn(f'{self.events[-1][0]:6.2f}', rows[0][1])
+        self.assertIn(f'{self.events[0][0]:6.2f}', rows[-1][1])
+
+    def test_a_gap_is_still_the_time_since_the_row_below_it(self):
+        # The trace is reversed, not the clock.
+        rows = screens.trace_rows(self.dev, self.events)
+        self.assertIn('0.20', rows[-2][1])
+
+    def test_the_findings_bring_no_heading_of_their_own(self):
+        # They go in a box that is already titled.
+        moved = capture.what_moved_together(
+            [(1.00, 'axis', 0, 12000), (1.10, 'button', 0, 1)])
+        for tone, _t in screens.together_rows(self.dev, moved):
+            self.assertNotEqual('subhead', tone)
+
+    def test_with_nothing_found_it_says_so_rather_than_nothing(self):
+        said = screens.together_rows(self.dev, [])
+        self.assertTrue(said)
+        self.assertTrue(all(t for _tone, t in said))
+
+    def test_a_finding_names_both_things_in_words(self):
+        moved = capture.what_moved_together(
+            [(1.00, 'axis', 0, 12000), (1.10, 'button', 0, 1)])
+        said = '\n'.join(t for _tone, t in
+                         screens.together_rows(self.dev, moved))
+        self.assertIn(self.dev.button_label(0), said)
+        self.assertIn('axis 0', said.replace(
+            screens._thing_said(self.dev, 'axis', 0), 'axis 0'))

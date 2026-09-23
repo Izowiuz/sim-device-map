@@ -33,6 +33,7 @@ KEYS = (
     ('n', 'new', 'press a control that is not in the file yet'),
     ('r', 'reach', 'work out how far each control is, by reaching'),
     ('f', 'facts', 'answer one question about how each control feels'),
+    ('w', 'watch', 'touch one thing and see everything it fires'),
     ('a', 'an axis', 'describe an axis'),
     ('u', 'unwired', 'say the leftover buttons have nothing behind them'),
     ('s', 'save', 'write the device file'),
@@ -537,6 +538,62 @@ def _unanswered(group):
     if not group.bindable:
         return 0
     return sum(1 for f in FACTS if group.told(f) == 'missing')
+
+
+def trace_rows(dev, events, room=None):
+    """[(tone, text)] -- the trace, newest first.
+
+    Live rather than collected and printed at the end: you cannot tell
+    whether you pressed the thing you meant to until it is too late to
+    press it again, and the gap between two events is most of the answer.
+
+    Newest at the top because that is where your eye already is, and
+    because the rows that fall off the bottom are then the ones you have
+    stopped caring about. Each gap is still the time since the event
+    below it: the trace is reversed, not the clock.
+    """
+    out, last = [], None
+    for t, kind, num, val in (events[-room:] if room else events):
+        gap = '' if last is None else f'+{t - last:.2f}s'
+        last = t
+        said = ({1: 'press', 0: 'release'}.get(val, str(val))
+                if kind == 'button' else str(val))
+        out.append(('measured' if kind == 'button' else 'guessed',
+                    f'{t:6.2f} {gap:>7}  {kind:<6} {num:<3} {said:<8} '
+                    f'{_thing_said(dev, kind, num)}'))
+    return out[::-1]
+
+
+def _thing_said(dev, kind, num):
+    """What the map calls the thing that just fired."""
+    if kind != 'axis':
+        return dev.button_label(num)
+    a, g = dev.axis(num), dev.axis_group(num)
+    said = a.label if a and a.label else f'axis {num}'
+    return f'{said} [{g.label}]' if g and g.label else said
+
+
+def together_rows(dev, moved):
+    """[(tone, text)] -- what the trace says is one piece of plastic.
+
+    No heading of its own: it goes in a box that is already titled, and
+    pinned to the bottom of the screen rather than run on after the
+    trace, so it does not walk down the screen as events arrive.
+    """
+    if not moved:
+        return [('meta', 'nothing yet')]
+    out = []
+    for m in moved:
+        if m.kind == 'contact':
+            out.append(('measured', f'button {m.a} closes while axis'
+                                    f' {m.b} travels  ({m.times}x)'))
+        else:
+            out.append(('measured', f'axis {m.a} and axis {m.b} report the'
+                                    f' same value  ({m.times}x)'))
+        first = 'button' if m.kind == 'contact' else 'axis'
+        out.append(('plain', f'  {_thing_said(dev, first, m.a)}'))
+        out.append(('plain', f'  {_thing_said(dev, "axis", m.b)}'))
+    return out
 
 
 def found_rows(found):

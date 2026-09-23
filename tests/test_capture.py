@@ -8,13 +8,17 @@ survive the trip is a control the wizard quietly rewrites.
 The real captures are the fixtures, because they are the shapes that exist.
 """
 
+import copy
 import os
+import struct
 import unittest
 
 import capture
 import devicemap
+import fake
 import questions as q
 import screens
+import tui
 
 
 def round_trip(group):
@@ -534,3 +538,251 @@ class SteppingBack(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class WhatMovedTogether(unittest.TestCase):
+    """The question the trace exists to answer.
+
+    "Free in the plan" and "free under the hand" are different: a trim
+    axis on a throttle lever that travels under the same hand trims the
+    aircraft on every power change, and nothing in the map said so.
+    """
+
+    def moved(self, events):
+        return capture.what_moved_together(events)
+
+    def test_a_lever_whose_travel_ends_in_a_switch(self):
+        got, = self.moved([(1.00, 'axis', 5, 12000),
+                           (1.10, 'button', 31, 1)])
+        self.assertEqual(('contact', 31, 5), (got.kind, got.a, got.b))
+
+    def test_a_press_long_after_the_travel_is_a_separate_control(self):
+        self.assertEqual([], self.moved([(1.0, 'axis', 5, 12000),
+                                         (9.0, 'button', 31, 1)]))
+
+    def test_a_release_is_not_a_press(self):
+        self.assertEqual([], self.moved([(1.0, 'axis', 5, 12000),
+                                         (1.1, 'button', 31, 0)]))
+
+    def test_two_levers_clamped_into_one(self):
+        got, = self.moved([(1.000, 'axis', 2, 8000),
+                           (1.005, 'axis', 3, 8000)])
+        self.assertEqual(('axes', 2, 3), (got.kind, got.a, got.b))
+
+    def test_two_levers_that_happen_to_pass_the_same_value(self):
+        # Far enough apart in time to be two hands doing two things.
+        self.assertEqual([], self.moved([(1.0, 'axis', 2, 8000),
+                                         (3.0, 'axis', 3, 8000)]))
+
+    def test_the_same_axis_twice_is_not_a_pair(self):
+        self.assertEqual([], self.moved([(1.000, 'axis', 2, 8000),
+                                         (1.005, 'axis', 2, 8000)]))
+
+    def test_a_pair_is_named_the_same_way_round_every_time(self):
+        one, = self.moved([(1.000, 'axis', 3, 8000),
+                           (1.005, 'axis', 2, 8000)])
+        two, = self.moved([(1.000, 'axis', 2, 8000),
+                           (1.005, 'axis', 3, 8000)])
+        self.assertEqual((one.a, one.b), (two.a, two.b))
+
+    def test_the_one_that_kept_happening_comes_first(self):
+        events = [(1.000, 'axis', 2, 8000), (1.005, 'axis', 3, 8000),
+                  (2.000, 'axis', 2, 9000), (2.005, 'axis', 3, 9000),
+                  (5.000, 'axis', 6, 100), (5.010, 'axis', 7, 100)]
+        first, second = self.moved(events)
+        self.assertGreater(first.times, second.times)
+        self.assertEqual((2, 3), (first.a, first.b))
+
+    def test_nothing_at_all_is_not_an_answer_about_anything(self):
+        self.assertEqual([], self.moved([]))
+
+
+class WritingDownACoupling(unittest.TestCase):
+    """Two axes that move as one, recorded on both of them.
+
+    `moves_with` and `coupling` have been in the schema since the start
+    and nothing could ever fill them: they were typed into the file by
+    hand. This is what fills them.
+    """
+
+    class Picks:
+        """A tui that answers every menu with the same choice."""
+
+        def __init__(self, pick: 'int | None' = 0):
+            self.pick, self.asked = pick, []
+
+        def menu(self, title, items, hints=None, subtitle='', **kw):
+            self.asked.append((title, list(items), subtitle))
+            return self.pick
+
+    def setUp(self):
+        real = devicemap.load_all()[0]
+        self.dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
+        for a in self.dev._raw['axis']:
+            a.pop('moves_with', None)
+            a.pop('coupling', None)
+        self.dev = devicemap.Device(self.dev._raw, real.path)
+
+    def moved(self, a=2, b=3, times=4):
+        return [capture.Moved('axes', a, b, times)]
+
+    def axis(self, index):
+        got = self.dev.axis(index)
+        assert got is not None
+        return got
+
+    def test_it_writes_the_pair_on_both_of_them(self):
+        self.assertTrue(capture._record_couplings(
+            self.Picks(), self.dev, self.moved()))
+        self.assertEqual([3], self.axis(2).moves_with)
+        self.assertEqual([2], self.axis(3).moves_with)
+
+    def test_it_writes_what_kind_of_coupling_you_picked(self):
+        capture._record_couplings(self.Picks(1), self.dev, self.moved())
+        self.assertEqual(capture.COUPLINGS[1], self.axis(2).coupling)
+
+    def test_it_reaches_the_file_and_the_thing_in_hand(self):
+        capture._record_couplings(self.Picks(), self.dev, self.moved())
+        raw = next(a for a in self.dev._raw['axis'] if a['index'] == 2)
+        self.assertEqual([3], raw['moves_with'])
+        self.assertEqual(self.axis(2).moves_with, raw['moves_with'])
+
+    def test_saying_nothing_writes_nothing(self):
+        self.assertFalse(capture._record_couplings(
+            self.Picks(None), self.dev, self.moved()))
+        self.assertEqual([], self.axis(2).moves_with)
+
+    def test_a_button_during_a_travel_is_not_written_here(self):
+        # That is a fact about one control -- a lever whose travel ends
+        # in a switch -- and the place to say so is the control.
+        tui = self.Picks()
+        self.assertFalse(capture._record_couplings(
+            tui, self.dev, [capture.Moved('contact', 31, 5, 3)]))
+        self.assertEqual([], tui.asked)
+
+    def test_the_question_names_the_two_levers_and_not_just_numbers(self):
+        tui = self.Picks()
+        capture._record_couplings(tui, self.dev, self.moved())
+        _title, _items, subtitle = tui.asked[0]
+        self.assertIn(self.axis(2).label, subtitle)
+        self.assertIn(self.axis(3).label, subtitle)
+
+    def test_a_pair_already_on_file_gains_rather_than_replaces(self):
+        raw = next(a for a in self.dev._raw['axis'] if a['index'] == 2)
+        raw['moves_with'] = [7]
+        self.dev = devicemap.Device(self.dev._raw, self.dev.path)
+        capture._record_couplings(self.Picks(), self.dev, self.moved())
+        self.assertEqual([3, 7], self.axis(2).moves_with)
+
+
+class WhatGetsIntoTheTrace(unittest.TestCase):
+    """A trace of a stick jittering at rest is a trace of nothing with
+    the real events pushed off the top of it."""
+
+    def setUp(self):
+        self.events, self.rest = [], {}
+
+    def add(self, typ, num, val, now=1.0):
+        return capture.add_event(self.events, self.rest, now, typ, num, val)
+
+    def test_a_press_goes_in(self):
+        self.assertTrue(self.add(capture.JS_EVENT_BUTTON, 3, 1))
+        self.assertEqual([(1.0, 'button', 3, 1)], self.events)
+
+    def test_a_release_goes_in_too(self):
+        self.assertTrue(self.add(capture.JS_EVENT_BUTTON, 3, 0))
+
+    def test_an_axis_parked_away_from_centre_has_not_moved(self):
+        # Where the opening burst said it was sitting. Without this a
+        # lever parked at one end opens the trace with a full-scale move
+        # that nobody made.
+        self.rest[2] = 9000
+        self.assertFalse(self.add(capture.JS_EVENT_AXIS, 2, 9000))
+        self.assertTrue(self.add(capture.JS_EVENT_AXIS, 2, 32000))
+
+    def test_jitter_is_not_travel(self):
+        self.assertFalse(self.add(capture.JS_EVENT_AXIS, 2,
+                                  capture.AXIS_MOVED - 1))
+        self.assertEqual([], self.events)
+
+    def test_travel_is(self):
+        self.assertTrue(self.add(capture.JS_EVENT_AXIS, 2,
+                                 capture.AXIS_MOVED + 1))
+
+    def test_travel_is_measured_from_where_it_last_was(self):
+        self.add(capture.JS_EVENT_AXIS, 2, 20000)
+        self.assertFalse(self.add(capture.JS_EVENT_AXIS, 2, 21000))
+        self.assertTrue(self.add(capture.JS_EVENT_AXIS, 2, 30000))
+
+
+class WhereTheAxesAreSittingWhenYouStart(unittest.TestCase):
+    """The burst the driver sends on open, kept rather than thrown away."""
+
+    def burst(self, events):
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, b''.join(
+            struct.pack('<IhBB', 0, val, typ, num) for typ, num, val in events))
+        os.close(write_fd)
+        try:
+            return capture.axes_at_rest(read_fd)
+        finally:
+            os.close(read_fd)
+
+    def test_it_reads_where_each_axis_is(self):
+        got = self.burst([(capture.JS_EVENT_AXIS | capture.JS_EVENT_INIT,
+                           2, 9000)])
+        self.assertEqual({2: 9000}, got)
+
+    def test_buttons_in_the_burst_are_not_axes(self):
+        got = self.burst([(capture.JS_EVENT_BUTTON | capture.JS_EVENT_INIT,
+                           3, 1)])
+        self.assertEqual({}, got)
+
+    def test_the_last_word_on_an_axis_wins(self):
+        got = self.burst([(capture.JS_EVENT_AXIS, 2, 9000),
+                          (capture.JS_EVENT_AXIS, 2, -9000)])
+        self.assertEqual({2: -9000}, got)
+
+    def test_a_trace_starts_knowing_where_the_axes_are(self):
+        # `drain`, which every other flow calls at this point, throws
+        # that away -- and then a lever parked at one end opens the
+        # trace with a move nobody made.
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, struct.pack(
+            '<IhBB', 0, 9000, capture.JS_EVENT_AXIS | capture.JS_EVENT_INIT, 2))
+        os.close(write_fd)
+        try:
+            events, rest = capture.start_trace(read_fd)
+        finally:
+            os.close(read_fd)
+        self.assertEqual([], events)
+        self.assertEqual({2: 9000}, rest)
+
+
+class TheWatchScreenItself(unittest.TestCase):
+    """One frame of it, driven with a pipe and a key that leaves."""
+
+    def one_frame(self):
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)                  # nothing to read, ever
+        scr = fake.Screen(18, 90, keys=[27])
+        t = tui.Tui(scr, tui.Theme(False))
+        try:
+            got = capture.watch(t, devicemap.load_all()[0], read_fd)
+        finally:
+            os.close(read_fd)
+        return got, scr.text()
+
+    def test_escape_leaves_without_writing_anything(self):
+        got, _said = self.one_frame()
+        self.assertFalse(got)
+
+    def test_the_findings_box_is_on_the_screen_from_the_first_frame(self):
+        # Pinned, so it is in the same place every frame rather than
+        # walking down the screen as events arrive.
+        _got, said = self.one_frame()
+        self.assertIn('moved together', said)
+
+    def test_and_so_is_what_to_do(self):
+        _got, said = self.one_frame()
+        self.assertIn('Touch one control at a time.', said)

@@ -335,16 +335,13 @@ each game. Nothing in either game's repo describes your devices any more.
 ./capture.py              # work through the unknown controls
 ./capture.py --list       # what's known about each connected device
 
-./probe.py                # print events live; Ctrl-C summarises
-./probe.py --js /dev/input/js1 --seconds 25
-
 python3 -c 'import devicemap; print(devicemap.find_connected())'
 ```
 
-`capture.py` asks what a control is. `probe.py` shows what a control *does* —
-every event labelled from the map, and on exit what fired together: a button
+The list asks what a control is. `w` on it asks what a control *does*: every
+event labelled from the map as it happens, and what fired together — a button
 closing while an axis travels, or two axes reporting the same value. Touch one
-control at a time.
+control at a time. What it finds about two axes it offers to write down.
 
 ```python
 import devicemap
@@ -357,8 +354,8 @@ g = dev.axis_group(5)           # the control an axis belongs to
 g.bindable_buttons              # excludes rest, travel and transient contacts
 g.tier                          # how far from flying, once a profile is on
 g.shape                         # positions, latching, directional, clicks...
-g.fact('hold_ok')               # the file's answer, or what the shape says
-g.told('hold_ok')               # 'measured' or 'guessed'
+g.fact('hold_ok')               # the file's answer, or None
+g.told('hold_ok')               # 'measured' or 'missing'
 devicemap.compatible(g, other)  # can both be worked at once
 dev.axis(2).independent         # False when another axis moves with it
 ```
@@ -369,8 +366,8 @@ Device files are expensive to rebuild and cheap to extend. Anything learned
 about a control — from a capture, from a game's own config, from the owner —
 belongs in the file with the right `source`, not in a note elsewhere.
 
-Two questions the file answers only if someone measures them, both via
-`probe.py`:
+Two questions the file answers only if someone measures them, both under
+`w` on the control list:
 
 - whether a button and an axis are **one control** (`travel_contact`,
   `rest_contact`, `transient`)

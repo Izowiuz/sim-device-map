@@ -23,6 +23,7 @@ import select
 import struct
 import time
 import tomllib
+from dataclasses import dataclass
 
 import devicemap
 import questions
@@ -58,7 +59,8 @@ def drain(fd):
     """Swallow the synthetic initial-state burst the kernel sends on open."""
     while select.select([fd], [], [], 0.15)[0]:
         try:
-            os.read(fd, 8 * 128)
+            if not os.read(fd, 8 * 128):
+                return          # end of the stream, not a pause in it
         except BlockingIOError:
             return
 
@@ -139,6 +141,60 @@ def one_button(tui, fd, title, prompt, help_lines):
         k = tui.key(0)
         if k in ('enter', 'esc'):
             return None
+
+
+#: A button that closes within this long of an axis moving is very likely
+#: the same physical control -- the end of a lever's travel, or a hat that
+#: clicks. Measured by hand on the VMAX: a deliberate second press never
+#: landed this close, and a lever's own switch never landed further.
+TOGETHER = 0.35
+
+#: Two axes reporting within this of each other, over and over, are one
+#: control -- or two clamped together, which is the same thing to anybody
+#: laying out bindings.
+LOCKSTEP = 0.02
+
+
+@dataclass
+class Moved:
+    """Two things that keep happening at the same moment.
+
+    `kind` is what sort of coincidence it is: a button closing while an
+    axis travels, or two axes reporting the same value. `times` is how
+    often, because once is a coincidence and twenty times is a lever.
+    """
+    kind: str                   # 'contact' or 'axes'
+    a: int                      # the button, or the lower axis
+    b: int                      # the axis
+    times: int
+
+
+def what_moved_together(events):
+    """[Moved] -- what the trace says is one piece of plastic.
+
+    `events` are `(seconds, kind, number, value)` in the order they
+    happened. The map answers "what is this button" well and "what else
+    moves when I touch it" not at all, and that gap has cost real time:
+    a trim axis bound to a throttle lever that travels under the same
+    hand trims the aircraft on every power change.
+    """
+    contact, locked = {}, {}
+    axes = [(t, num, val) for t, kind, num, val in events if kind == 'axis']
+    for t, kind, num, val in events:
+        if kind == 'button' and val == 1:
+            for t2, n2, _v in axes:
+                if abs(t2 - t) <= TOGETHER:
+                    contact[(num, n2)] = contact.get((num, n2), 0) + 1
+    for i, (t, num, val) in enumerate(axes):
+        for t2, n2, v2 in axes[i + 1:]:
+            if t2 - t > LOCKSTEP:
+                break
+            if n2 != num and v2 == val:
+                key = (min(num, n2), max(num, n2))
+                locked[key] = locked.get(key, 0) + 1
+    out = ([Moved('contact', a, b, n) for (a, b), n in contact.items()]
+           + [Moved('axes', a, b, n) for (a, b), n in locked.items()])
+    return sorted(out, key=lambda m: (-m.times, m.kind, m.a, m.b))
 
 
 def classify_travel(values):
@@ -262,8 +318,8 @@ def write_device(dev):
         for k in ('evdev', 'hid', 'rest', 'travel', 'kind', 'label'):
             if a.get(k):
                 out.append(emit_str(k, a[k]))
-        # What probe.py measured about this axis moving with another. It
-        # costs nothing to carry and it is not re-derivable from a capture.
+        # What `w` on the list measured about this axis moving with
+        # another: not re-derivable from a capture, and cheap to carry.
         if a.get('moves_with'):
             out.append(emit_list('moves_with', list(a['moves_with'])))
         if a.get('coupling'):
@@ -1309,6 +1365,10 @@ def overview(tui, dev, js, probe=None):
             if got == '?':
                 tui.popup('help', screens.key_help())
                 continue
+            if got in ('w', 'W'):
+                if watch(tui, dev, fd):
+                    dirty = True
+                continue
             if got in ('s', 'S'):
                 if probe:
                     dev._raw['fingerprint'] = {
@@ -1349,6 +1409,145 @@ def overview(tui, dev, js, probe=None):
                 dirty = True
     finally:
         os.close(fd)
+
+
+def watch(tui, dev, fd):
+    """Touch one thing at a time and see everything it fires.
+
+    The map answers "what is this button" and says nothing about what
+    else moves with it. That gap cost real time twice: a trim axis went
+    on a throttle lever that travels under the same hand, so every power
+    change trimmed the aircraft, and a paddle and a grip lever sit in the
+    file as two controls and may be one piece of plastic.
+
+    True when it wrote something. What it can write is a coupling between
+    two axes; a button that closes during a travel is a fact about one
+    control, and the place to fix that is the control.
+    """
+    events, rest = start_trace(fd)
+    start = time.time()
+    while True:
+        for typ, num, val in _events(fd):
+            add_event(events, rest, time.time() - start, typ, num, val)
+        moved = what_moved_together(events)
+        h, _w = tui.scr.getmaxyx()
+        rows = screens.trace_rows(dev, events, room=max(1, h - 4))
+        tui.screen(f'Watch — {dev.product}',
+                   rows or [('meta', 'Touch one control at a time.')],
+                   ('\u21b5 done', 'ESC cancel'),
+                   ui.plural(len(events), 'event'), full=True)
+        # Over the oldest rows, which is where the trace's least useful
+        # end now is, and in the same place every frame.
+        tui.corner('moved together', screens.together_rows(dev, moved))
+        tui.scr.refresh()
+        k = tui.key(0.05)
+        if k == 'esc':
+            return False
+        if k == 'enter':
+            return _record_couplings(tui, dev, moved)
+
+
+#: How far an axis has to travel before it counts as moving. A stick at
+#: rest jitters by a few hundred either way.
+AXIS_MOVED = 3000
+
+
+def axes_at_rest(fd):
+    """Where each axis is sitting, from the burst the driver sends on open.
+
+    `drain` throws that burst away, which is what you want when you are
+    waiting for somebody to press something. Here it is exactly wrong: a
+    lever parked at one end reads its first real report as a full-scale
+    move, and the trace opens with something that did not happen.
+
+    Read raw rather than through `_events`, which drops the opening state
+    on the floor for the same good reason every other flow wants it gone.
+    """
+    rest = {}
+    while select.select([fd], [], [], 0.15)[0]:
+        try:
+            data = os.read(fd, 8 * 128)
+        except BlockingIOError:
+            break
+        if not data:            # end of the stream, not a pause in it
+            break
+        for i in range(0, len(data), 8):
+            _t, val, typ, num = struct.unpack('<IhBB', data[i:i + 8])
+            if typ & JS_EVENT_AXIS:
+                rest[num] = val
+    return rest
+
+
+def start_trace(fd):
+    """An empty trace, and where the axes are sitting as it opens.
+
+    One thing rather than two lines in the loop above, because the two
+    have to agree: a trace that starts without the rest positions opens
+    with a full-scale move on every axis parked away from centre, and
+    `drain` -- which every other flow calls here -- throws exactly those
+    positions away.
+    """
+    return [], axes_at_rest(fd)
+
+
+def add_event(events, rest, now, typ, num, val):
+    """Put one joystick event into a trace, or drop it. True if kept.
+
+    `rest` is where each axis was last seen. An axis that has not
+    travelled since is dropped, because a trace of a stick jittering at
+    rest is a trace of nothing with the real events pushed off the top.
+    """
+    if typ & JS_EVENT_AXIS:
+        if abs(val - rest.get(num, 0)) < AXIS_MOVED:
+            return False
+        rest[num] = val
+        events.append((now, 'axis', num, val))
+        return True
+    if typ & JS_EVENT_BUTTON:
+        events.append((now, 'button', num, val))
+        return True
+    return False
+
+#: What two axes that move as one can be to each other. `switchable` is
+#: the VMAX's throttle levers: clamped together by a catch on the device,
+#: so the pair is a choice you made rather than how it is built.
+COUPLINGS = ('switchable', 'always')
+
+
+def _record_couplings(tui, dev, moved):
+    """Write down the axis pairs the trace found. True if anything moved."""
+    pairs = [m for m in moved if m.kind == 'axes']
+    if not pairs:
+        return False
+    wrote = False
+    for m in pairs:
+        said = tui.menu(
+            f'axis {m.a} and axis {m.b} move as one',
+            [f'{c} — {_COUPLING_SAID[c]}' for c in COUPLINGS],
+            [[_COUPLING_SAID[c]] for c in COUPLINGS],
+            subtitle=f'{screens._thing_said(dev, "axis", m.a)}\n'
+                     f'{screens._thing_said(dev, "axis", m.b)}')
+        if said is None:
+            continue
+        for one, other in ((m.a, m.b), (m.b, m.a)):
+            raw = next((a for a in dev._raw.get('axis', [])
+                        if a.get('index') == one), None)
+            if raw is None:
+                continue
+            with_ = sorted(set(raw.get('moves_with') or []) | {other})
+            raw['moves_with'] = with_
+            raw['coupling'] = COUPLINGS[said]
+            ax = dev.axis(one)
+            if ax is not None:
+                ax.moves_with, ax.coupling = with_, COUPLINGS[said]
+            wrote = True
+    return wrote
+
+
+_COUPLING_SAID = {
+    'switchable': 'a catch on the device clamps them; you can unclamp it',
+    'always': 'they are built as one and never move apart',
+}
 
 
 def _watch(dev, fd, rows):

@@ -153,7 +153,8 @@ class WhatIsPluggedIn(unittest.TestCase):
     what every screen downstream branches on."""
 
     def connected(self, devices, probes):
-        with mock.patch.object(devicemap, 'load_all', lambda: devices), \
+        with mock.patch.object(devicemap, 'load_all',
+                               lambda bare=False, rig=None: devices), \
              mock.patch.object(devicemap.glob, 'glob',
                                lambda _p: sorted(probes)), \
              mock.patch.object(devicemap, 'probe', lambda js: probes[js]):

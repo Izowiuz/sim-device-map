@@ -609,7 +609,7 @@ def load_profiles():
     return out
 
 
-def profile(name=None):
+def profile(name=None, strict=True):
     """The rig to read devices under, or None when there are none on file.
 
     One profile and it is the one. More than one and the name has to come
@@ -617,6 +617,10 @@ def profile(name=None):
     asking. Nothing here guesses which desk you are sitting at: guessing is
     how the wizard that reads this map ended up with two override channels
     and a silent fallback to whichever device loaded last.
+
+    `strict=False` hands back None instead of stopping, for a caller that
+    has a way to ask -- the wizard puts the question on a screen. A library
+    caller has nobody to ask, so for it the ambiguity is fatal.
     """
     have = load_profiles()
     want = name or os.environ.get('SIM_DEVICE_PROFILE')
@@ -629,20 +633,25 @@ def profile(name=None):
         return hit
     if len(have) == 1:
         return have[0]
-    if not have:
+    if not have or not strict:
         return None
     raise SystemExit('more than one profile, so which desk this is for cannot '
                      'be decided here.\n  choose with SIM_DEVICE_PROFILE='
                      + '|'.join(p.name for p in have))
 
 
-def load_all(bare=False):
+def load_all(bare=False, rig=None):
     """Every captured device, under the active rig.
 
     `bare=True` reads the captures with no rig over them, which is what the
     capture tool wants: it is describing the hardware, not the desk.
+
+    `rig` is that desk, said outright. Without it this asks `profile()`,
+    which stops rather than guess when there is more than one -- and a
+    caller that has already asked somebody should not be made to set an
+    environment variable to say so.
     """
-    prof = None if bare else profile()
+    prof = None if bare else (rig if rig is not None else profile())
     return [d.under(prof) for d in _load_captures()]
 
 
@@ -786,10 +795,15 @@ class Match:
         return f'<Match {self.js} {p} {self.status}>'
 
 
-def find_connected():
-    """One Match per connected joystick, newest information first."""
+def find_connected(rig=None, bare=False):
+    """One Match per connected joystick, newest information first.
+
+    `bare=True` answers what is plugged in without a desk over it, which
+    is a question the desk does not come into: whether a joystick has a
+    capture on file is true at every desk or at none.
+    """
     out = []
-    devices = load_all()
+    devices = load_all(bare=bare, rig=rig)
     for js in sorted(glob.glob('/dev/input/js*')):
         info = probe(js)
         dev = next((d for d in devices if d.matches_identity(info)), None)

@@ -10,7 +10,9 @@ The real captures are the fixtures, because they are the shapes that exist.
 
 import copy
 import os
+import shutil
 import struct
+import tempfile
 import unittest
 
 import capture
@@ -36,7 +38,7 @@ class EveryCapturedControlSurvivesTheTrip(unittest.TestCase):
         you press. Left out here rather than asserted about falsely.
         """
         shapes = {c['name'] for c in capture.SHEET.vocabulary['kind']}
-        for dev in devicemap.load_all():
+        for dev in fake.devices():
             for g in dev.groups(bindable=True):
                 if g.kind in shapes:
                     yield dev, g
@@ -155,11 +157,17 @@ class WritingTheRigBack(unittest.TestCase):
             with self.subTest(rig=prof.name):
                 self.assertEqual(_facts(prof._as_dict()), _facts(back))
 
-    def test_the_comment_block_at_the_top_is_kept(self):
+    def test_prose_above_the_first_field_is_kept(self):
+        # Nothing regenerates it: it is what somebody wrote about their
+        # own desk. A desk with none written about it has none to keep.
         for prof in devicemap.load_profiles():
+            head = open(prof.path).read().lstrip()
+            if not head.startswith('#'):
+                continue
             _back, text = self.rewritten(prof)
             with self.subTest(rig=prof.name):
                 self.assertTrue(text.lstrip().startswith('#'), text[:40])
+                self.assertIn(head.splitlines()[0], text)
 
     def test_a_measured_spot_says_nothing_about_being_measured(self):
         # `how` is only worth a column when it is not the ordinary case.
@@ -186,7 +194,7 @@ class WhatTheRoundsAmountTo(unittest.TestCase):
     and what the rounds say about a control is where it ends up."""
 
     def dev(self):
-        return devicemap.load_all()[0]
+        return fake.devices()[0]
 
     def some(self, dev, n=2):
         return [g for g in dev.groups(bindable=True) if g.id][:n]
@@ -253,17 +261,17 @@ class HowASpotIsWritten(unittest.TestCase):
 
 class WhereAHandIsAtEachLevel(unittest.TestCase):
     def test_in_the_grip_it_is_on_the_device(self):
-        dev = devicemap.load_all()[0]
+        dev = fake.devices()[0]
         for level in devicemap.GRIPPED:
             with self.subTest(level=level):
                 self.assertEqual(dev.kind, capture._part_of(dev, level))
 
     def test_off_the_grip_it_is_on_the_base(self):
-        dev = devicemap.load_all()[0]
+        dev = fake.devices()[0]
         self.assertEqual(f'{dev.kind}_base', capture._part_of(dev, 'BASE'))
 
     def test_every_part_it_names_is_in_the_vocabulary(self):
-        for dev in devicemap.load_all():
+        for dev in fake.devices():
             for level in devicemap.LEVELS[:3]:
                 with self.subTest(dev=dev.slug, level=level):
                     self.assertIn(capture._part_of(dev, level),
@@ -275,7 +283,7 @@ class RecordingAFact(unittest.TestCase):
         # Both, because the screen redraws from the parsed control and the
         # writer emits from the raw one. Setting only the first loses it on
         # save; only the second and the list still says "to go".
-        dev = devicemap.load_all()[0]
+        dev = fake.devices()[0]
         g = next(x for x in dev.groups(bindable=True) if x.id)
         capture._set_fact(dev, g, 'hold_ok', False)
         try:
@@ -307,7 +315,7 @@ class AControlThatOwnsNothing(unittest.TestCase):
 
     def dev(self):
         import copy
-        real = devicemap.load_all()[0]
+        real = fake.devices()[0]
         return devicemap.Device(copy.deepcopy(real._raw), real.path)
 
     def empty(self):
@@ -355,9 +363,9 @@ class SteppingAnAnswerOn(unittest.TestCase):
 
     def setUp(self):
         import copy
-        real = devicemap.load_all()[0]
+        real = fake.devices()[0]
         self.dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
-        self.dev.under(devicemap.profile())
+        self.dev.under(fake.rig(real))
         self.g = next(x for x in self.dev.groups(bindable=True) if x.id)
         self.sheet = capture.SHEET
 
@@ -425,8 +433,8 @@ class TheReachListIsNotCountedInRows(unittest.TestCase):
     def test_the_panel_counts_nothing_rather_than_rows(self):
         # Three of the rows are postures, so a row count would disagree
         # with the round count on the other half of the same frame.
-        dev = devicemap.load_all()[0]
-        prof = devicemap.profile()
+        dev = fake.devices()[0]
+        prof = fake.rig(dev)
         tui = Browsed()
         capture.ask_reach(tui, None, dev, prof)
         count = tui.kw.get('count')
@@ -441,7 +449,7 @@ class WhatNoRoundReached(unittest.TestCase):
     def test_it_says_what_it_worked_out_rather_than_just_writing_it(self):
         # The one answer on that screen nobody gave by pressing
         # something. Written in silence it looks like data from nowhere.
-        dev = devicemap.load_all()[0]
+        dev = fake.devices()[0]
         tui, said = Said(), {'access': {}}
         capture._hands_off(tui, dev, said)
         self.assertEqual(1, len(tui.shown))
@@ -456,7 +464,7 @@ class WhatNoRoundReached(unittest.TestCase):
                                         for t in lines))
 
     def test_it_stays_quiet_when_every_control_was_reached(self):
-        dev = devicemap.load_all()[0]
+        dev = fake.devices()[0]
         mine = [{'part': 'throttle', 'level': 'HOME', 'finger': 'thumb'}]
         said = {'access': {g.id: list(mine)
                            for g in dev.groups(bindable=True) if g.id}}
@@ -465,7 +473,7 @@ class WhatNoRoundReached(unittest.TestCase):
         self.assertEqual([], tui.shown)
 
     def test_a_control_nobody_reached_ends_up_off(self):
-        dev = devicemap.load_all()[0]
+        dev = fake.devices()[0]
         said = {'access': {}}
         capture._hands_off(Said(), dev, said)
         every = [g.id for g in dev.groups(bindable=True) if g.id]
@@ -474,7 +482,7 @@ class WhatNoRoundReached(unittest.TestCase):
                             for sp in said['access'].values()))
 
     def test_one_that_was_reached_is_left_alone(self):
-        dev = devicemap.load_all()[0]
+        dev = fake.devices()[0]
         one = next(g for g in dev.groups(bindable=True) if g.id)
         mine = [{'part': 'throttle', 'level': 'HOME', 'finger': 'thumb'}]
         said = {'access': {one.id: list(mine)}}
@@ -482,7 +490,7 @@ class WhatNoRoundReached(unittest.TestCase):
         self.assertEqual(mine, said['access'][one.id])
 
     def test_nothing_that_cannot_be_bound_is_placed(self):
-        dev = devicemap.load_all()[0]
+        dev = fake.devices()[0]
         said = {'access': {}}
         capture._hands_off(Said(), dev, said)
         for g in dev.groups():
@@ -616,7 +624,7 @@ class WritingDownACoupling(unittest.TestCase):
             return self.pick
 
     def setUp(self):
-        real = devicemap.load_all()[0]
+        real = fake.devices()[0]
         self.dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
         for a in self.dev._raw['axis']:
             a.pop('moves_with', None)
@@ -768,7 +776,7 @@ class TheWatchScreenItself(unittest.TestCase):
         scr = fake.Screen(18, 90, keys=[27])
         t = tui.Tui(scr, tui.Theme(False))
         try:
-            got = capture.watch(t, devicemap.load_all()[0], read_fd)
+            got = capture.watch(t, fake.devices()[0], read_fd)
         finally:
             os.close(read_fd)
         return got, scr.text()
@@ -786,3 +794,93 @@ class TheWatchScreenItself(unittest.TestCase):
     def test_and_so_is_what_to_do(self):
         _got, said = self.one_frame()
         self.assertIn('Touch one control at a time.', said)
+
+
+class MakingAndUnmakingADesk(unittest.TestCase):
+    """The three that touch the disk: new, rename, delete."""
+
+    class Says:
+        """A tui with every answer decided in advance."""
+
+        def __init__(self, typed='', yes=True):
+            self.typed, self.yes, self.shown = typed, yes, []
+
+        def ask(self, title, lines=(), default=''):
+            return self.typed if self.typed is not None else None
+
+        def confirm(self, title, lines, aside=(), default=True):
+            return self.yes
+
+        def popup(self, title, lines, full=False):
+            self.shown.append(title)
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.was = devicemap.PROFILES
+        devicemap.PROFILES = self.dir
+
+    def tearDown(self):
+        devicemap.PROFILES = self.was
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def files(self):
+        return sorted(os.listdir(self.dir))
+
+    def test_a_new_desk_reaches_the_disk(self):
+        got = capture._new_desk(self.Says('Fotel'))
+        assert got is not None
+        self.assertEqual('Fotel', got.name)
+        self.assertEqual(['fotel.toml'], self.files())
+        self.assertEqual('Fotel', devicemap.load_profiles()[0].name)
+
+    def test_a_desk_with_no_name_is_not_made(self):
+        self.assertIsNone(capture._new_desk(self.Says('')))
+        self.assertEqual([], self.files())
+
+    def test_a_name_already_taken_does_not_overwrite(self):
+        capture._new_desk(self.Says('Fotel'))
+        before = open(os.path.join(self.dir, 'fotel.toml')).read()
+        tui = self.Says('Fotel')
+        self.assertIsNone(capture._new_desk(tui))
+        self.assertTrue(tui.shown)
+        self.assertEqual(before,
+                         open(os.path.join(self.dir, 'fotel.toml')).read())
+
+    def test_renaming_keeps_the_file_it_is_in(self):
+        prof = capture._new_desk(self.Says('Fotel'))
+        assert prof is not None
+        self.assertTrue(capture._rename_desk(self.Says('Kanapa'), prof))
+        self.assertEqual(['fotel.toml'], self.files())
+        self.assertEqual('Kanapa', devicemap.load_profiles()[0].name)
+
+    def test_renaming_to_the_same_thing_is_not_a_change(self):
+        prof = capture._new_desk(self.Says('Fotel'))
+        assert prof is not None
+        self.assertFalse(capture._rename_desk(self.Says('Fotel'), prof))
+
+    def test_deleting_takes_the_file_with_it(self):
+        prof = capture._new_desk(self.Says('Fotel'))
+        assert prof is not None
+        self.assertTrue(capture._delete_desk(self.Says(yes=True), prof, None))
+        self.assertEqual([], self.files())
+
+    def test_saying_no_keeps_it(self):
+        prof = capture._new_desk(self.Says('Fotel'))
+        assert prof is not None
+        self.assertFalse(capture._delete_desk(self.Says(yes=False), prof,
+                                              None))
+        self.assertEqual(['fotel.toml'], self.files())
+
+    def test_deleting_is_never_the_suggested_answer(self):
+        # RETURN on that dialog must not be the one that cannot be undone.
+        seen = {}
+
+        class Watches(self.Says):
+            def confirm(self, title, lines, aside=(), default=True):
+                seen['default'] = default
+                return False
+
+        prof = capture._new_desk(self.Says('Fotel'))
+        assert prof is not None
+        capture._delete_desk(Watches(), prof, None)
+        self.assertFalse(seen['default'])

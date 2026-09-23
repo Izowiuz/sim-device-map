@@ -22,6 +22,35 @@ if REPO not in sys.path:
 import devicemap                                            # noqa: E402
 
 
+#: The desk the tests work at. Not one off the disk: `profiles/` holds
+#: whatever rigs the person running these happens to own, and a suite that
+#: reads those fails the day they add a second desk -- which is a fact
+#: about their room, not about this code.
+RIG = {'name': 'a desk in a test', 'device': []}
+
+
+def rig(*devices):
+    """A `Profile` naming these devices, each under a hand.
+
+    `devices` are `(slug, hand)`, or a `Device` for the plain case of
+    "it is on the desk and nothing more is said".
+    """
+    said = []
+    for d in devices:
+        slug, hand = d if isinstance(d, tuple) else (d.slug, 'left')
+        said.append({'slug': slug, 'hand': hand})
+    return devicemap.Profile(dict(RIG, device=said), '<test-desk>')
+
+
+def devices(rig=None):
+    """Every captured device, under a desk the test owns.
+
+    Deliberately not `devicemap.load_all()`: that asks which desk this
+    is, and the answer is on the disk of whoever is running the tests.
+    """
+    return devicemap.load_all(bare=rig is None, rig=rig)
+
+
 def group(kind, buttons=(), names=(), dirs=(), stages=(), push=None,
           rest_contact=None, travel_contact=None, transient=(), **kw):
     """One raw `[[group]]` table.

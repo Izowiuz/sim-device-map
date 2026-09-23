@@ -207,7 +207,7 @@ class TheDirectionVocabulary(unittest.TestCase):
     def test_the_captures_speak_it(self):
         # A rule that has to accept "forward" from one capture and "up" from
         # another is a rule about spelling.
-        for dev in devicemap.load_all():
+        for dev in fake.devices():
             for g in dev.groups():
                 for st in g.states:
                     if not st.direction:

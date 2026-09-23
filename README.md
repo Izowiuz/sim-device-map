@@ -338,6 +338,11 @@ each game. Nothing in either game's repo describes your devices any more.
 python3 -c 'import devicemap; print(devicemap.find_connected())'
 ```
 
+It opens on the desk list: which rig this is, because the same throttle on a
+chair rail is under a different hand and within reach of different things.
+`n` starts one, `e` says which hand is on what. With one desk on file it is
+already chosen and you go straight to the devices.
+
 The list asks what a control is. `w` on it asks what a control *does*: every
 event labelled from the map as it happens, and what fired together — a button
 closing while an axis travels, or two axes reporting the same value. Touch one

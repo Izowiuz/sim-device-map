@@ -21,6 +21,7 @@ import curses
 import os
 import select
 import struct
+import sys
 import time
 import tomllib
 from dataclasses import dataclass
@@ -1623,8 +1624,180 @@ def _mark_unwired(tui, dev, btns):
     return True
 
 
-def tui_main(scr, found):
+#: What one device can be to a rig. `role` is what it is FOR on this desk,
+#: which is not always what it is: a second throttle can be the collective.
+ROLES_ON_A_DESK = ('stick', 'throttle', 'pedals', 'panel', 'collective')
+
+HANDS = ('left', 'right')
+
+
+def edit_rig(tui, prof):
+    """Which hand is on what, for every device this desk names.
+
+    Nothing else asks these. `hand` decides whether two controls can be
+    worked at once, and until somebody says it every pair on the desk
+    reads as a pair of hands that might be the same one.
+    """
+    at, moved = 0, False
+    while True:
+        devs = [d for d in devicemap.load_all(bare=True)
+                if prof.entry(d.slug) is not None]
+        if not devs:
+            tui.popup(f'{prof.name} has no devices',
+                      [('plain', 'A desk names the devices on it. This one'
+                                 ' names none, or names captures that are'
+                                 ' not on file.')])
+            return moved
+        what, at = tui.browse(
+            f'{prof.name} — which hand is on what',
+            screens.rig_rows(prof, devs),
+            lambda n: screens.rig_side(prof, devs, n),
+            keys=('↑↓ move', '↵ change it', 'ESC back'),
+            index=min(at, len(devs) - 1))
+        if what is None:
+            return moved
+        if _say_where_it_sits(tui, prof, devs[at]):
+            moved = True
+
+
+def _say_where_it_sits(tui, prof, dev):
+    """Hand, role, and whether letting go of it drops the aircraft."""
+    said = prof.entry(dev.slug)
+    if said is None:
+        return False
+    hand = tui.menu(f'{dev.product} — which hand?', list(HANDS),
+                    [[f'It sits under your {h} hand.'] for h in HANDS],
+                    index=HANDS.index(said['hand']) if said.get('hand')
+                    in HANDS else 0)
+    if hand is None:
+        return False
+    said['hand'] = HANDS[hand]
+    role = tui.menu(f'{dev.product} — what is it for?',
+                    list(ROLES_ON_A_DESK),
+                    [[f'On this desk it is the {r}.']
+                     for r in ROLES_ON_A_DESK],
+                    index=(ROLES_ON_A_DESK.index(said['role'])
+                           if said.get('role') in ROLES_ON_A_DESK else 0))
+    if role is not None:
+        said['role'] = ROLES_ON_A_DESK[role]
+    said['leaving_home_releases_flight'] = bool(tui.confirm(
+        f'{dev.product} — does letting go of it matter?',
+        ['Does taking your hand off this one stop you flying?'],
+        ['True of a stick you are holding the aircraft with, and false of'
+         ' a throttle you can leave where it is.',
+         'It is why a control you have to let go of to reach is further'
+         ' away than one you only stretch for.'],
+        default=said.get('leaving_home_releases_flight', False)))
+    write_profile(prof)
+    return True
+
+
+def pick_desk(tui, here=None):
+    """Which desk this is, and the chance to change what it says.
+
+    Returns the rig to read devices under, or None if you left without
+    choosing one. A rig is not a preference stored somewhere: it is the
+    answer to "where am I sitting", which nothing but you can know, so it
+    is asked once a session and never guessed.
+    """
+    at = 0
+    while True:
+        rigs = devicemap.load_profiles()
+        if not rigs:
+            if not tui.confirm('No desk on file',
+                               ['Nothing says where your hardware sits.'],
+                               ['A desk says which hand is on what, and'
+                                ' what each control is within reach of.',
+                                'Without one nothing can be measured about'
+                                ' reach, and every control reads as being'
+                                ' nowhere.']):
+                return None
+            if _new_desk(tui) is None:
+                return None
+            continue
+        have = devicemap.load_all(bare=True)
+        what, at = tui.browse(
+            'Which desk is this?',
+            screens.profile_rows(rigs, here),
+            lambda n: screens.profile_side(rigs, n, here, have),
+            keys=screens.desk_keys(), index=min(at, len(rigs) - 1),
+            takes=screens.desk_takes(), tail='? help')
+        if what is None:
+            return here
+        if what == 'enter':
+            return rigs[at]
+        if what == '?':
+            tui.popup('help', screens.desk_help())
+        elif what in ('n', 'N'):
+            _new_desk(tui)
+        elif what in ('r', 'R'):
+            _rename_desk(tui, rigs[at])
+        elif what in ('d', 'D'):
+            _delete_desk(tui, rigs[at], here)
+        elif what in ('e', 'E'):
+            edit_rig(tui, rigs[at])
+
+
+def _new_desk(tui):
+    """Start a desk with nothing on it. The rig, or None if you backed out."""
+    name = tui.ask('New desk', ['What is this one called? "Biurko",'
+                                ' "Fotel", whatever tells them apart.'])
+    if not name:
+        return None
+    path = os.path.join(devicemap.PROFILES, devicemap.slug(name) + '.toml')
+    if os.path.exists(path):
+        tui.popup('That name is taken',
+                  [('plain', f'{os.path.basename(path)} is already on file.')])
+        return None
+    prof = devicemap.Profile({'name': name, 'device': []}, path)
+    write_profile(prof)
+    return prof
+
+
+def _rename_desk(tui, prof):
+    """Rename a desk in place. The file keeps its own name."""
+    name = tui.ask('Rename', [f'Now called {prof.name}.'], default=prof.name)
+    if not name or name == prof.name:
+        return False
+    prof.name = name
+    write_profile(prof)
+    return True
+
+
+def _delete_desk(tui, prof, here):
+    """Delete a desk and the file under it. True if it went."""
+    said = [f'{prof.name} — {ui.plural(len(prof.devices), "device")}']
+    measured = sum(len(d.get('rounds') or []) for d in prof.devices)
+    if measured:
+        said.append(f'{ui.plural(measured, "measured reach")} on it')
+    if prof is here:
+        said.append('This is the desk you are working at.')
+    if not tui.confirm(f'Delete {prof.name}?', said,
+                       ['The file goes with it. What a control IS stays in'
+                        ' its capture; where it ended up does not.'],
+                       default=False):
+        return False
+    try:
+        os.remove(prof.path)
+    except OSError as e:
+        tui.popup('It is still there', [('plain', str(e))])
+        return False
+    return True
+
+
+def tui_main(scr, rig):
     tui = ui.setup(scr)
+    # Asked before anything is read, because what a device is under one
+    # desk it is not under another: the hand, the roles, and every reach
+    # already measured all come from here.
+    rig = pick_desk(tui, rig)
+    if rig is None:
+        return
+    found = [m for m in devicemap.find_connected(rig) if m.device]
+    if not found:
+        tui.popup('Nothing connected that the map knows',
+                  [('plain', 'Plug something in, or capture it first.')])
+        return
 
     while True:
         if len(found) == 1:
@@ -1634,7 +1807,9 @@ def tui_main(scr, found):
             hints = [screens.found_hints(mm) for mm in found]
             i = tui.menu('sim-device-map — which device?', items, hints,
                          quits=True)
-            if i is None:
+            # Not `is None`: a menu that ticks several answers with a
+            # list, and one row is what this screen means by an answer.
+            if not isinstance(i, int):
                 return
             m = found[i]
         dev, js = m.device, m.js
@@ -1721,19 +1896,30 @@ def main():
                          'control actually does')
     args = ap.parse_args()
 
-    connected = devicemap.find_connected()
+    # No desk over it: whether a joystick has a capture on file is true
+    # at every desk or at none, and asking which desk this is belongs on
+    # a screen -- where there is somebody to answer.
+    connected = devicemap.find_connected(bare=True)
     found = [m for m in connected if m.device]
     for m in connected:
         if m.device is None:
             print(f'{m.js}  {m.probe.get("usb") or "?"}  — not in the map; '
                   f'add a device file')
-    if not found:
+    if not found and (args.raw or args.list):
         raise SystemExit('no mapped device connected')
 
     if args.raw:
         return watch_raw(found)
 
     if args.list:
+        # Under a desk when one can be settled, because how far away a
+        # control is is a fact about the desk and not about the device.
+        rig = devicemap.profile(strict=False)
+        if rig is not None:
+            found = [m for m in devicemap.find_connected(rig=rig) if m.device]
+        elif devicemap.load_profiles():
+            print('# more than one desk on file, so reach is left out;'
+                  ' SIM_DEVICE_PROFILE=<name> to read under one')
         for m in found:
             js, dev = m.js, m.device
             if not m.ok:
@@ -1754,7 +1940,9 @@ def main():
                 print(f'      {"unknown":16s} {btns}')
         return
 
-    curses.wrapper(tui_main, found)
+    # Which desk, and the devices under it, are both settled inside: the
+    # question needs a screen, and the answer changes what is read.
+    curses.wrapper(tui_main, devicemap.profile(strict=False))
 
 
 if __name__ == '__main__':

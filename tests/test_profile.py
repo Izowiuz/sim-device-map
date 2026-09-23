@@ -132,7 +132,21 @@ class WhichRig(unittest.TestCase):
                 devicemap.profile('Fotel')
 
 
-class TheRigOnFile(unittest.TestCase):
+class UnderEachRig:
+    """Every capture, laid under every desk on file, one at a time.
+
+    Not `load_all()`: that asks which desk this is, and the answer is on
+    the disk of whoever is running these. Each rule below holds at every
+    desk, so every desk is what it is checked against.
+    """
+
+    def under_each_rig(self):
+        for rig in devicemap.load_profiles() or [None]:
+            for dev in devicemap.load_all(bare=rig is None, rig=rig):
+                yield dev
+
+
+class TheRigOnFile(UnderEachRig, unittest.TestCase):
     """The profile this repo ships, held to the captures it names."""
 
     @classmethod
@@ -175,14 +189,14 @@ class TheRigOnFile(unittest.TestCase):
         # Not tier 0, and not the furthest either. Until somebody walks
         # the fingers there is no answer, and a number here would be one
         # the solver could not tell from a measured one.
-        for dev in devicemap.load_all():
+        for dev in self.under_each_rig():
             for g in dev.groups(bindable=True):
                 if not g.access:
                     with self.subTest(dev=dev.slug, ctrl=g.label):
                         self.assertIsNone(g.tier)
 
     def test_nothing_unwired_pretends_to_be_reachable(self):
-        for dev in devicemap.load_all():
+        for dev in self.under_each_rig():
             for g in dev.groups():
                 if g.bindable:
                     continue
@@ -204,7 +218,7 @@ class ADeviceOnNoDesk(unittest.TestCase):
         self.assertEqual('throttle', dev.role)
 
 
-class WhatTheRigHasNotBeenTold(unittest.TestCase):
+class WhatTheRigHasNotBeenTold(UnderEachRig, unittest.TestCase):
     """The profile ships with no `access` at all.
 
     It used to ship with the old `reach` prose migrated into spots, which
@@ -220,7 +234,7 @@ class WhatTheRigHasNotBeenTold(unittest.TestCase):
                     self.assertFalse(said.get('access'))
 
     def test_so_no_control_has_a_tier(self):
-        for dev in devicemap.load_all():
+        for dev in self.under_each_rig():
             for g in dev.groups(bindable=True):
                 with self.subTest(dev=dev.slug, ctrl=g.label):
                     self.assertIsNone(g.tier)
@@ -228,3 +242,102 @@ class WhatTheRigHasNotBeenTold(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class WhichDeskThisIs(unittest.TestCase):
+    """More than one rig on file and nothing here knows which you are at.
+
+    Guessing is how the wizard downstream ended up with two override
+    channels and a silent fallback to whichever device loaded last.
+    """
+
+    def rigs(self, *names):
+        return [devicemap.Profile({'name': n, 'device': []}, f'<{n}>')
+                for n in names]
+
+    def profile(self, names, **kw):
+        with mock.patch.object(devicemap, 'load_profiles',
+                               lambda: self.rigs(*names)), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            return devicemap.profile(**kw)
+
+    def test_one_rig_is_the_one(self):
+        got = self.profile(['Biurko'])
+        assert got is not None
+        self.assertEqual('Biurko', got.name)
+
+    def test_none_on_file_is_not_an_error(self):
+        self.assertIsNone(self.profile([]))
+
+    def test_two_rigs_stop_a_caller_that_cannot_ask(self):
+        with self.assertRaises(SystemExit):
+            self.profile(['Biurko', 'Fotel'])
+
+    def test_but_not_one_that_can(self):
+        self.assertIsNone(self.profile(['Biurko', 'Fotel'], strict=False))
+
+    def test_naming_it_settles_it_either_way(self):
+        for strict in (True, False):
+            with self.subTest(strict=strict):
+                got = self.profile(['Biurko', 'Fotel'], name='Fotel',
+                                   strict=strict)
+                assert got is not None
+                self.assertEqual('Fotel', got.name)
+
+    def test_a_name_nothing_answers_to_is_an_error_even_when_it_can_ask(self):
+        # A rig you named and have not got is a typo, not a question.
+        with self.assertRaises(SystemExit):
+            self.profile(['Biurko'], name='Fotel', strict=False)
+
+
+class ReadingDevicesUnderAGivenRig(unittest.TestCase):
+
+    def test_the_rig_you_hand_it_is_the_one_it_uses(self):
+        rig = devicemap.Profile({'name': 'x', 'device': [
+            {'slug': 'virpil-vmax-prime-throttle', 'hand': 'right'}]}, '<x>')
+        got = devicemap.load_all(rig=rig)
+        one = next(d for d in got
+                   if d.slug == 'virpil-vmax-prime-throttle')
+        self.assertEqual('right', one.hand)
+
+    def test_and_it_never_asks_which_desk_this_is(self):
+        rig = devicemap.Profile({'name': 'x', 'device': []}, '<x>')
+        def boom():
+            raise AssertionError('asked anyway')
+        with mock.patch.object(devicemap, 'profile', boom):
+            self.assertTrue(devicemap.load_all(rig=rig))
+
+    def test_bare_means_no_desk_at_all(self):
+        for d in devicemap.load_all(bare=True):
+            with self.subTest(dev=d.slug):
+                self.assertEqual('', d.hand)
+
+
+class WithMoreThanOneDeskOnFile(unittest.TestCase):
+    """The tool has to start. Which desk this is, it asks on a screen."""
+
+    def two(self):
+        return [devicemap.Profile({'name': n, 'device': []}, f'<{n}>')
+                for n in ('Biurko', 'Fotel')]
+
+    def test_what_is_plugged_in_is_asked_without_a_desk(self):
+        # Whether a joystick has a capture on file is true at every desk
+        # or at none, so the question does not come into it.
+        def asked(*a, **kw):
+            raise AssertionError('asked which desk anyway')
+
+        with mock.patch.object(devicemap, 'profile', asked), \
+             mock.patch.object(devicemap.glob, 'glob', lambda _p: []):
+            self.assertEqual([], devicemap.find_connected(bare=True))
+
+    def test_the_wizard_starts_rather_than_stopping(self):
+        import capture
+        opened = []
+        with mock.patch.object(devicemap, 'load_profiles', self.two), \
+             mock.patch.object(devicemap.glob, 'glob', lambda _p: []), \
+             mock.patch.object(capture.curses, 'wrapper',
+                               lambda fn, *a: opened.append(a)), \
+             mock.patch.object(capture.sys, 'argv', ['capture.py']), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            capture.main()
+        self.assertEqual([(None,)], opened)

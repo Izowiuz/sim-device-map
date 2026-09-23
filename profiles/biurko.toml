@@ -11,7 +11,7 @@
 # wizard writes it, finger by finger; until it has, a device has none and
 # every control on it is of unknown reach.
 
-name = "Biurko"
+name = "IzoDesk"
 
 [[device]]
 slug = "virpil-vmax-prime-throttle"
@@ -23,4 +23,3 @@ slug = "virpil-vpc-stick-warbrd-d"
 role = "stick"
 hand = "right"
 leaving_home_releases_flight = true
-

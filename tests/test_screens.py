@@ -208,14 +208,15 @@ class HowFarAControlHasGot(unittest.TestCase):
 
 class TheRealRig(unittest.TestCase):
     def test_every_control_gets_a_row(self):
-        for dev in devicemap.load_all():
+        for dev in fake.devices():
             rows = screens.control_rows(dev)
             with self.subTest(dev=dev.slug):
                 self.assertEqual(len(dev.groups()), len(rows))
 
     def test_the_devices_say_what_is_outstanding(self):
-        prof = devicemap.profile()
-        rows = screens.device_rows(prof, devicemap.load_all())
+        have = fake.devices()
+        prof = fake.rig(*have)
+        rows = screens.device_rows(prof, fake.devices(prof))
         self.assertTrue(rows)
         for _tone, text, dev in rows:
             with self.subTest(dev=dev.slug):
@@ -285,7 +286,7 @@ class TheFiveFacts(unittest.TestCase):
 
     def setUp(self):
         self.sheet = q.read()
-        self.dev = devicemap.load_all()[0]
+        self.dev = fake.devices()[0]
         self.asks = self.sheet.of(q.ALL)
 
     def test_one_row_per_question(self):
@@ -348,7 +349,7 @@ class TheFiveFacts(unittest.TestCase):
 class AnsweringOneFact(unittest.TestCase):
     def setUp(self):
         self.sheet = q.read()
-        self.dev = devicemap.load_all()[0]
+        self.dev = fake.devices()[0]
         self.ctrls = [g for g in self.dev.groups(bindable=True) if g.id]
 
     def ask(self, sets):
@@ -478,7 +479,7 @@ class EveryRowFitsThePanelItIsIn(unittest.TestCase):
 
     def setUp(self):
         self.sheet = q.read()
-        self.dev = devicemap.load_all()[0]
+        self.dev = fake.devices()[0]
         scr = fake.Screen(16, 80)
         t = ui.Tui(scr, ui.Theme(False))
         (_ly, lx, _lh, lw), _right = t.halves(*scr.getmaxyx())
@@ -509,10 +510,8 @@ class EveryRowFitsThePanelItIsIn(unittest.TestCase):
             self.fits(screens.answer_rows(self.dev, ask, controls))
 
     def test_the_fingers_and_their_grips(self):
-        prof = devicemap.profile()
-        assert prof is not None
         self.fits(screens.reach_rows(screens.reach_rounds(
-            self.dev, prof, self.sheet.vocabulary['level'])))
+            self.dev, fake.rig(self.dev), self.sheet.vocabulary['level'])))
 
 
 class ThePickerAtTheDoor(unittest.TestCase):
@@ -531,7 +530,7 @@ class ThePickerAtTheDoor(unittest.TestCase):
             return 'nothing in the map looks like this'
 
     def setUp(self):
-        self.found = [self.Plugged(d) for d in devicemap.load_all()]
+        self.found = [self.Plugged(d) for d in fake.devices()]
 
     def test_it_counts_what_is_answered_and_not_what_is_wired(self):
         for m, (_tone, text) in zip(self.found,
@@ -610,7 +609,7 @@ class ThePickerAtTheDoor(unittest.TestCase):
                 self.assertLessEqual(len(text), room)
 
     def test_a_device_that_did_not_match_says_why(self):
-        odd = self.Plugged(devicemap.load_all()[0], ok=False, status='drift')
+        odd = self.Plugged(fake.devices()[0], ok=False, status='drift')
         self.assertIn(odd.explain(), screens.found_hints(odd))
         self.assertNotIn(odd.explain(),
                          screens.found_hints(self.found[0]))
@@ -626,7 +625,7 @@ class WhatARowSaysAControlHas(unittest.TestCase):
     """A dial and a mini-stick report an axis and have no positions."""
 
     def setUp(self):
-        self.dev = devicemap.load_all()[0]
+        self.dev = fake.devices()[0]
 
     def test_a_control_with_only_axes_is_not_empty(self):
         for g in self.dev.groups(bindable=True):
@@ -666,10 +665,8 @@ class TheReachRounds(unittest.TestCase):
 
     def setUp(self):
         self.sheet = q.read()
-        self.dev = devicemap.load_all()[0]
-        prof = devicemap.profile()
-        assert prof is not None
-        self.prof = prof
+        self.dev = fake.devices()[0]
+        self.prof = fake.rig(self.dev)
         self.rounds = screens.reach_rounds(self.dev, self.prof,
                                            self.sheet.vocabulary['level'])
 
@@ -928,7 +925,7 @@ class WhatWasThatButton(unittest.TestCase):
     your thumb and no idea what it is called."""
 
     def dev(self):
-        return devicemap.load_all()[0]
+        return fake.devices()[0]
 
     def test_it_names_the_control(self):
         dev = self.dev()
@@ -1076,7 +1073,7 @@ class TheLiveTrace(unittest.TestCase):
     """Events as they happen, with the map's own names on them."""
 
     def setUp(self):
-        self.dev = devicemap.load_all()[0]
+        self.dev = fake.devices()[0]
         self.events = [(1.00, 'button', 0, 1), (1.20, 'button', 0, 0),
                        (2.00, 'axis', 0, 12000)]
 
@@ -1142,3 +1139,111 @@ class TheLiveTrace(unittest.TestCase):
         self.assertIn(self.dev.button_label(0), said)
         self.assertIn('axis 0', said.replace(
             screens._thing_said(self.dev, 'axis', 0), 'axis 0'))
+
+
+class TheDeskList(unittest.TestCase):
+    """Which desk this is, and what each one holds."""
+
+    def setUp(self):
+        self.have = devicemap.load_all(bare=True)
+        self.rigs = [
+            devicemap.Profile({'name': 'Biurko', 'device': [
+                {'slug': self.have[0].slug, 'role': 'throttle',
+                 'hand': 'left'}]}, '<a>'),
+            devicemap.Profile({'name': 'Fotel', 'device': []}, '<b>'),
+            devicemap.Profile({'name': 'Gdzies', 'device': [
+                {'slug': 'nic-takiego'}]}, '<c>')]
+
+    def test_one_row_per_desk(self):
+        self.assertEqual(len(self.rigs),
+                         len(screens.profile_rows(self.rigs)))
+
+    def test_the_one_you_are_at_says_so_in_words(self):
+        # Not only in a tone: with no colours to hand the theme falls
+        # back to bold, and "the bold one" is not something you read off
+        # a list of two.
+        rows = screens.profile_rows(self.rigs, self.rigs[0])
+        self.assertNotEqual(rows[0][1].strip(), rows[1][1].strip())
+        plain = [t for tone, t in rows if tone != 'measured']
+        marked, = [t for tone, t in rows if tone == 'measured']
+        self.assertTrue(all(len(t) < len(marked) for t in plain))
+
+    def test_with_no_desk_in_hand_none_is_marked(self):
+        for tone, _t in screens.profile_rows(self.rigs):
+            self.assertNotEqual('measured', tone)
+
+    def test_a_row_fits_the_panel(self):
+        scr = fake.Screen(16, 80)
+        t = ui.Tui(scr, ui.Theme(False))
+        (_ly, lx, _lh, lw), _r = t.halves(*scr.getmaxyx())
+        room = ui.text_in(lx, lw)[1]
+        for _tone, text in screens.profile_rows(self.rigs, self.rigs[0]):
+            with self.subTest(row=text):
+                self.assertLessEqual(len(text), room)
+
+    def test_a_desk_names_its_devices_the_way_the_rest_of_the_tool_does(self):
+        _head, said = screens.profile_side(self.rigs, 0, None, self.have)
+        shown = '\n'.join(t for _tone, t in said)
+        self.assertIn(self.have[0].product, shown)
+        self.assertNotIn(self.have[0].slug, shown)
+
+    def test_a_desk_naming_a_capture_nobody_has_says_so(self):
+        _head, said = screens.profile_side(self.rigs, 2, None, self.have)
+        shown = '\n'.join(t for _tone, t in said)
+        self.assertIn('nic-takiego', shown)
+        self.assertIn('no capture on file', shown)
+
+    def test_an_empty_desk_says_it_is_empty(self):
+        _head, said = screens.profile_side(self.rigs, 1, None, self.have)
+        self.assertTrue(any('No devices' in t for _tone, t in said))
+
+    def test_the_desk_you_are_at_is_not_offered_again(self):
+        _h, here = screens.profile_side(self.rigs, 0, self.rigs[0], self.have)
+        _h, other = screens.profile_side(self.rigs, 0, None, self.have)
+        self.assertNotIn('↵ works at this desk.',
+                         [t for _tone, t in here])
+        self.assertIn('↵ works at this desk.',
+                      [t for _tone, t in other])
+
+    def test_the_border_shows_fewer_keys_than_there_are(self):
+        # Five do not fit in the 46 columns beside the panel, and `?`
+        # is what shows the rest.
+        self.assertLess(len(screens.desk_keys()), len(screens.DESK_KEYS) + 1)
+        self.assertIn('?', screens.desk_takes())
+
+    def test_every_key_is_explained_exactly_once(self):
+        said = '\n'.join(t for _tone, t in screens.desk_help())
+        for k, _says, what in screens.DESK_KEYS:
+            with self.subTest(key=k):
+                self.assertEqual(1, said.count(what))
+
+
+class WhatADeskSaysAboutOneDevice(unittest.TestCase):
+    """Which hand is on it, which nothing else asks."""
+
+    def setUp(self):
+        self.have = devicemap.load_all(bare=True)
+        self.prof = devicemap.Profile({'name': 'x', 'device': [
+            {'slug': self.have[0].slug, 'role': 'throttle', 'hand': 'left'},
+            {'slug': self.have[1].slug}]}, '<x>')
+
+    def test_a_device_with_no_hand_said_is_not_finished(self):
+        rows = screens.rig_rows(self.prof, self.have)
+        self.assertEqual(screens.TONE['measured'], rows[0][0])
+        self.assertNotEqual(screens.TONE['measured'], rows[1][0])
+
+    def test_and_says_so_in_words(self):
+        rows = screens.rig_rows(self.prof, self.have)
+        self.assertIn('left hand', rows[0][1])
+        self.assertIn('no hand said', rows[1][1])
+
+    def test_the_panel_says_why_the_hand_matters(self):
+        _head, said = screens.rig_side(self.prof, self.have, 1)
+        shown = ' '.join(t for _tone, t in said)
+        self.assertIn('at once', shown)
+
+    def test_it_says_whether_letting_go_stops_you_flying(self):
+        _h, a = screens.rig_side(self.prof, self.have, 0)
+        self.prof.devices[0]['leaving_home_releases_flight'] = True
+        _h, b = screens.rig_side(self.prof, self.have, 0)
+        self.assertNotEqual([t for _tone, t in a], [t for _tone, t in b])

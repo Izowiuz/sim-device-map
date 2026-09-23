@@ -673,15 +673,132 @@ def device_rows(prof, devices):
     return out
 
 
+def rig_rows(prof, devices):
+    """[(tone, text)] -- one device on this desk, and what it is here."""
+    out = []
+    for dev in devices:
+        said = prof.entry(dev.slug) or {}
+        hand = f'{said["hand"]} hand' if said.get('hand') else 'no hand said'
+        out.append(('measured' if said.get('hand') else 'unset',
+                    f'{dev.product[:28]:28} {said.get("role") or dev.kind:11}'
+                    f' {hand}'))
+    return out
+
+
+def rig_side(prof, devices, at):
+    """(title, [(tone, text)]) -- what this desk says about one device."""
+    dev = devices[at]
+    said = prof.entry(dev.slug) or {}
+    out = []
+    if not said.get('hand'):
+        out.append(('unset', 'Nobody has said which hand this is under.'))
+    else:
+        out.append(('measured', f'Under your {said["hand"]} hand.'))
+    out += [('plain', ''),
+            ('meta', 'Which hand decides whether two controls can be worked'
+                     ' at once. Until it is said, every pair across two'
+                     ' devices reads as a pair that might be one hand.')]
+    out += [('plain', ''),
+            ('meta', 'Letting go stops you flying.'
+                     if said.get('leaving_home_releases_flight')
+                     else 'You can let go of this one.')]
+    out += [('plain', ''), ('meta', '↵ changes what this desk says.')]
+    return dev.product, out
+
+
+#: What the desk list can do. One list, so the border and the help cannot
+#: disagree about which keys there are. The border shows the first few --
+#: it is 46 columns wide beside the panel and five keys do not fit -- and
+#: `?` shows all of them.
+DESK_KEYS = (
+    ('↵', 'use', 'work at the desk under the cursor'),
+    ('n', 'new', 'start a desk with no devices on it'),
+    ('r', 'rename', 'rename the desk under the cursor'),
+    ('d', 'delete', 'delete the desk under the cursor, and its file'),
+    ('e', 'hands', 'say which hand is on which device'),
+)
+
+
+def desk_keys():
+    """The key names for the border, most-needed first."""
+    return tuple(f'{k} {says}' for k, says, _what in DESK_KEYS[:3]) + (
+        'ESC back',)
+
+
+def desk_takes():
+    """Every key the desk list answers to, either case."""
+    return ('?',) + tuple(x for k, _says, _what in DESK_KEYS if k.isalpha()
+                          for x in (k, k.upper()))
+
+
+def desk_help():
+    """The keys, as a man page: what each does and nothing about why."""
+    out = [('head', 'NAME'),
+           ('plain', '  the desk list — where your hardware sits'),
+           ('plain', ''),
+           ('head', 'KEYS')]
+    wide = max(len(k) for k, _s, _w in DESK_KEYS)
+    for k, _says, what in DESK_KEYS:
+        out.append(('plain', f'  {k:<{wide}}  {what}'))
+    out += [('plain', f'  {"ESC":<{wide}}  back, keeping the desk you came'
+                      ' in on'),
+            ('plain', ''),
+            ('head', 'WHY THERE IS MORE THAN ONE'),
+            ('plain', '  A capture says what a control IS. A desk says'
+                      ' where it ended up.'),
+            ('plain', '  The same throttle on a chair rail is under a'
+                      ' different hand and'),
+            ('plain', '  within reach of different things, so it is a'
+                      ' different desk.')]
+    return out
+
+
 def profile_rows(profiles, here=None):
-    """[(tone, text, profile)] -- the rigs on file."""
+    """[(tone, text)] -- the rigs on file, and which one you are at.
+
+    Said in a word, not only in a colour: a theme with no colours to hand
+    falls back to bold, and "the bold one" is not something anybody reads
+    off a list of two.
+    """
     out = []
     for p in profiles:
-        tone = 'measured' if p is here else 'plain'
-        out.append((tone,
-                    f'{p.name[:24]:24} {ui.plural(len(p.devices), "device")}',
-                    p))
+        out.append(('measured' if p is here else 'plain',
+                    f'{p.name[:21]:21} '
+                    f'{ui.plural(len(p.devices), "device"):11}'
+                    + ('  ← here' if p is here else '')))
     return out
+
+
+def profile_side(profiles, at, here=None, devices=()):
+    """(title, [(tone, text)]) -- what the rig under the cursor holds.
+
+    `devices` are the captures on file, so a desk can name them the way
+    the rest of the tool does. A desk naming a capture nobody has says so
+    rather than showing a slug and leaving you to work it out.
+    """
+    p = profiles[at]
+    named = {d.slug: d.product for d in devices}
+    said = []
+    if not p.devices:
+        said.append(('unset', 'No devices on this desk yet.'))
+    for d in p.devices:
+        slug = d.get('slug', '?')
+        said.append(('plain' if slug in named or not named else 'unset',
+                     named.get(slug, slug)))
+        if named and slug not in named:
+            said.append(('meta', '  no capture on file for this one'))
+            continue
+        bits = [d.get('role') or '', f'{d["hand"]} hand' if d.get('hand')
+                else 'hand not said']
+        said.append(('meta', '  ' + ', '.join(b for b in bits if b)))
+    said += [('plain', ''),
+             ('meta', 'A desk says where the hardware ended up: which hand'
+                      ' is on what, and what each control is within reach'
+                      ' of. The same throttle on a chair rail is a'
+                      ' different desk.')]
+    if p is not here:
+        said += [('plain', ''), ('meta', '↵ works at this desk.')]
+    return p.name, said
 
 
 def dropped_said(gone):

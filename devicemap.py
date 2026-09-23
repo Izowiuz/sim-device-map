@@ -35,7 +35,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 #: so the `slug` inside does not have to repeat it and a second brand of pedals
 #: does not land in the same pile.
 CAPTURES = os.path.join(HERE, 'captures')
-PROFILES = os.path.join(HERE, 'profiles')
+
+#: Where the desks live. A capture belongs to this repo -- it is what the
+#: hardware IS, and it was expensive to measure -- but a desk is a fact
+#: about a room, and somebody with two rooms, or with their own files kept
+#: somewhere synced, has nowhere to put the second one. So: overridable,
+#: and every screen that reads desks says which directory it read.
+PROFILES = (os.environ.get('SIM_DEVICE_PROFILES')
+            or os.path.join(HERE, 'profiles'))
 
 #: How well a connected device lines up with its file.
 EXACT = 'exact'                 # identity and fingerprint both agree

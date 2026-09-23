@@ -341,3 +341,35 @@ class WithMoreThanOneDeskOnFile(unittest.TestCase):
              mock.patch.dict(os.environ, {}, clear=True):
             capture.main()
         self.assertEqual([(None,)], opened)
+
+
+class WhereTheDesksAreRead(unittest.TestCase):
+    """A capture belongs to this repo. A desk is a fact about a room, and
+    somebody with two rooms has nowhere to put the second one."""
+
+    def dir_for(self, env):
+        import importlib
+        with mock.patch.dict(os.environ, env, clear=True):
+            return importlib.reload(devicemap).PROFILES
+
+    def tearDown(self):
+        import importlib
+        importlib.reload(devicemap)
+
+    def test_by_default_it_is_this_repo(self):
+        got = self.dir_for({})
+        self.assertEqual(os.path.join(devicemap.HERE, 'profiles'), got)
+
+    def test_and_the_environment_can_say_otherwise(self):
+        self.assertEqual('/somewhere/else',
+                         self.dir_for({'SIM_DEVICE_PROFILES': '/somewhere/else'}))
+
+    def test_captures_are_not_moved_by_it(self):
+        # What the hardware IS stays with the map: it was expensive to
+        # measure and it is the same in every room.
+        import importlib
+        with mock.patch.dict(os.environ,
+                             {'SIM_DEVICE_PROFILES': '/somewhere/else'},
+                             clear=True):
+            self.assertEqual(os.path.join(devicemap.HERE, 'captures'),
+                             importlib.reload(devicemap).CAPTURES)

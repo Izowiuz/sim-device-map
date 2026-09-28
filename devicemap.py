@@ -616,35 +616,33 @@ def load_profiles():
     return out
 
 
-def profile(name=None, strict=True):
-    """The rig to read devices under, or None when there are none on file.
+def profile(name=None):
+    """The rig to read devices under, or None when it cannot be decided.
 
-    One profile and it is the one. More than one and the name has to come
-    from somewhere -- the argument, `SIM_DEVICE_PROFILE`, or whoever is
-    asking. Nothing here guesses which desk you are sitting at: guessing is
-    how the wizard that reads this map ended up with two override channels
-    and a silent fallback to whichever device loaded last.
+    One profile and it is the one. A name -- the argument or
+    SIM_DEVICE_PROFILE -- and it is that one. Anything else is None: none
+    on file, or more than one and nothing saying which.
 
-    `strict=False` hands back None instead of stopping, for a caller that
-    has a way to ask -- the wizard puts the question on a screen. A library
-    caller has nobody to ask, so for it the ambiguity is fatal.
+    Nothing here guesses which desk you are sitting at. It does not stop
+    the caller either: this used to raise on the ambiguity, which meant
+    every screen that asked the question late took the whole program down
+    with it -- `r` in the capture wizard did exactly that, with curses up.
+    Whoever wants a rig and has not got one knows what to do about it;
+    this only answers.
+
+    A name nothing answers to is still an error, because that is a typo
+    rather than a question.
     """
     have = load_profiles()
     want = name or os.environ.get('SIM_DEVICE_PROFILE')
-    if want:
-        hit = next((p for p in have if p.name == want), None)
-        if hit is None:
-            raise SystemExit(f'no profile called {want!r}'
-                             + ('; have ' + ', '.join(p.name for p in have)
-                                if have else '; none on file'))
-        return hit
-    if len(have) == 1:
-        return have[0]
-    if not have or not strict:
-        return None
-    raise SystemExit('more than one profile, so which desk this is for cannot '
-                     'be decided here.\n  choose with SIM_DEVICE_PROFILE='
-                     + '|'.join(p.name for p in have))
+    if not want:
+        return have[0] if len(have) == 1 else None
+    hit = next((p for p in have if p.name == want), None)
+    if hit is None:
+        raise SystemExit(f'no profile called {want!r}'
+                         + ('; have ' + ', '.join(p.name for p in have)
+                            if have else '; none on file'))
+    return hit
 
 
 def load_all(bare=False, rig=None):

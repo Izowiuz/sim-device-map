@@ -14,6 +14,7 @@ import shutil
 import struct
 import tempfile
 import unittest
+from unittest import mock
 
 import capture
 import devicemap
@@ -884,3 +885,406 @@ class MakingAndUnmakingADesk(unittest.TestCase):
         assert prof is not None
         capture._delete_desk(Watches(), prof, None)
         self.assertFalse(seen['default'])
+
+
+class TheDeskIsHandedDownNotAskedForAgain(unittest.TestCase):
+    """`r` used to ask the map which desk this was, from inside the list.
+
+    With more than one on file the map had no answer, and what it did
+    about that was stop the program -- with curses up, so the terminal
+    came back with a message and no screen.
+    """
+
+    def test_the_map_no_longer_stops_anybody(self):
+        was = os.environ.pop('SIM_DEVICE_PROFILE', None)
+        try:
+            with mock.patch.object(
+                    devicemap, 'load_profiles',
+                    lambda: [devicemap.Profile({'name': n, 'device': []},
+                                               f'<{n}>')
+                             for n in ('Biurko', 'Fotel')]):
+                self.assertIsNone(devicemap.profile())
+        finally:
+            if was is not None:
+                os.environ['SIM_DEVICE_PROFILE'] = was
+
+    def test_the_list_takes_the_desk_it_was_opened_with(self):
+        import inspect
+        said = inspect.signature(capture.overview).parameters
+        self.assertIn('rig', said)
+
+    def test_and_so_does_the_reload_after_a_change(self):
+        import inspect
+        said = inspect.signature(capture._reload).parameters
+        self.assertIn('rig', said)
+
+    def test_reloading_lays_that_desk_over_the_device_again(self):
+        dev = fake.devices()[0]
+        one = next(g for g in dev.groups(bindable=True) if g.id)
+        rig = devicemap.Profile({'name': 'x', 'device': [
+            {'slug': dev.slug, 'hand': 'left',
+             'access': {one.id: [{'part': 'throttle', 'level': 'HOME',
+                                  'finger': 'thumb'}]}}]}, '<x>')
+        capture._reload(dev, rig)
+        self.assertEqual('left', dev.hand)
+        self.assertEqual(0, next(g for g in dev.groups(bindable=True)
+                                 if g.id == one.id).tier)
+
+
+class WhatAReachRoundCanFind(unittest.TestCase):
+    """A dial, a mini-stick and a lever answer by moving an axis and never
+    close a button. A round that watched only buttons could not find them,
+    so fifteen rounds later they were what nothing had reached -- and that
+    was written down as OFF, which says you take your hand off the device
+    for a lever under your thumb."""
+
+    def setUp(self):
+        self.dev = fake.devices()[0]
+        self.axis_only = [g for g in self.dev.groups(bindable=True)
+                          if g.axes and not g.places]
+
+    def test_this_device_has_controls_with_no_buttons_at_all(self):
+        self.assertTrue(self.axis_only, 'nothing to be a test about')
+
+    def test_a_moved_axis_names_the_control_it_belongs_to(self):
+        one = self.axis_only[0]
+        got = capture.reached_ids(self.dev, [('axis', one.axes[0])])
+        self.assertEqual([one.id], got)
+
+    def test_a_pressed_button_still_does(self):
+        one = next(g for g in self.dev.groups(bindable=True) if g.places)
+        got = capture.reached_ids(self.dev, [('button', one.buttons[0])])
+        self.assertEqual([one.id], got)
+
+    def test_both_at_once_come_back_once_each(self):
+        axis = self.axis_only[0]
+        button = next(g for g in self.dev.groups(bindable=True) if g.places)
+        got = capture.reached_ids(self.dev, [
+            ('axis', axis.axes[0]), ('button', button.buttons[0]),
+            ('axis', axis.axes[0])])
+        self.assertEqual([axis.id, button.id], got)
+
+    def test_an_axis_nothing_owns_is_not_a_control(self):
+        self.assertEqual([], capture.reached_ids(self.dev, [('axis', 99)]))
+
+    def test_nor_is_a_button_nothing_owns(self):
+        self.assertEqual([], capture.reached_ids(self.dev, [('button', 999)]))
+
+    def test_the_screen_says_moving_counts(self):
+        lvl = q.read().vocabulary['level'][0]
+        one = screens.Round(lvl, 'thumb', [], False)
+        _title, _aside, says = screens.round_prompt(one)
+        self.assertIn('move', says)
+
+
+class TheRoundCollectorDriven(unittest.TestCase):
+    """The loop itself, on a pipe. The screen feeds it one event per
+    frame, so no threads and no waiting."""
+
+    class Feeds:
+        """A screen that writes the next event as it is drawn."""
+
+        def __init__(self, write_fd, script, h=20, w=90):
+            self.h, self.w, self.fd = h, w, write_fd
+            self.script, self.frames, self.spare = list(script), [], 1
+            self.rows = [[' '] * w for _ in range(h)]
+
+        def getmaxyx(self):
+            return self.h, self.w
+
+        def erase(self):
+            self.rows = [[' '] * self.w for _ in range(self.h)]
+
+        def refresh(self):
+            self.frames.append('\n'.join(''.join(r) for r in self.rows))
+            if self.script:
+                typ, num, val = self.script.pop(0)
+                os.write(self.fd, struct.pack('<IhBB', 0, val, typ, num))
+
+        def getch(self):
+            # One more frame after the script, because what the loop
+            # collected is drawn on the frame AFTER it arrived. Then
+            # RETURN: ESC would throw away what is being read here.
+            if self.script:
+                return -1
+            if self.spare:
+                self.spare -= 1
+                return -1
+            return 10
+
+        def addstr(self, y, x, text, attr=0):
+            for i, ch in enumerate(text):
+                if 0 <= y < self.h and 0 <= x + i < self.w:
+                    self.rows[y][x + i] = ch
+
+    def drive(self, script, burst=()):
+        read_fd, write_fd = os.pipe()
+        # Before the call, because that is where the driver's own opening
+        # burst arrives: in the loop it is dropped, as every other flow
+        # wants it dropped.
+        for typ, num, val in burst:
+            os.write(write_fd, struct.pack('<IhBB', 0, val, typ, num))
+        dev = fake.devices()[0]
+        scr = self.Feeds(write_fd, script)
+        t = tui.Tui(scr, tui.Theme(False))
+        try:
+            got = capture.collect_reached(t, read_fd, dev, 'Reach', ['x'],
+                                          says='press or move')
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        return got, dev, scr
+
+    def axis_only(self, dev):
+        return next(g for g in dev.groups(bindable=True)
+                    if g.axes and not g.places)
+
+    def test_a_moved_lever_is_collected(self):
+        dev = fake.devices()[0]
+        one = self.axis_only(dev)
+        got, dev, _scr = self.drive([
+            (capture.JS_EVENT_AXIS, one.axes[0], 30000)])
+        self.assertEqual([one.id], capture.reached_ids(dev, got))
+
+    def test_a_pressed_button_is_too(self):
+        dev = fake.devices()[0]
+        one = next(g for g in dev.groups(bindable=True) if g.places)
+        got, dev, _scr = self.drive([
+            (capture.JS_EVENT_BUTTON, one.buttons[0], 1)])
+        self.assertEqual([one.id], capture.reached_ids(dev, got))
+
+    def test_letting_a_button_go_is_not_reaching_it_again(self):
+        dev = fake.devices()[0]
+        one = next(g for g in dev.groups(bindable=True) if g.places)
+        got, _dev, _scr = self.drive([
+            (capture.JS_EVENT_BUTTON, one.buttons[0], 1),
+            (capture.JS_EVENT_BUTTON, one.buttons[0], 0)])
+        self.assertEqual([('button', one.buttons[0])], got)
+
+    def test_a_lever_sitting_still_at_one_end_reports_nothing(self):
+        # The opening burst says where it is. Without that, the first
+        # report of a parked axis reads as a full-scale move.
+        dev = fake.devices()[0]
+        one = self.axis_only(dev)
+        got, _dev, _scr = self.drive(
+            [(capture.JS_EVENT_AXIS, one.axes[0], 30000)],
+            burst=[(capture.JS_EVENT_AXIS | capture.JS_EVENT_INIT,
+                    one.axes[0], 30000)])
+        self.assertEqual([], got)
+
+    def test_the_screen_says_what_it_could_not_place(self):
+        # Silence reads as a press the program did not see.
+        fresh = fake.device(kind='stick',
+                            groups=[fake.group('unknown', [0, 1, 2])])
+        read_fd, write_fd = os.pipe()
+        scr = self.Feeds(write_fd, [(capture.JS_EVENT_BUTTON, 1, 1)])
+        t = tui.Tui(scr, tui.Theme(False))
+        try:
+            capture.collect_reached(t, read_fd, fresh, 'Reach', ['x'])
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        self.assertTrue(any('not a control yet' in f for f in scr.frames),
+                        scr.frames[-1])
+
+    def test_the_screen_names_what_it_found(self):
+        dev = fake.devices()[0]
+        one = self.axis_only(dev)
+        _got, _dev, scr = self.drive([
+            (capture.JS_EVENT_AXIS, one.axes[0], 30000)])
+        self.assertTrue(any(one.label in f for f in scr.frames), scr.frames[-1])
+
+    def test_one_spot_per_control_however_much_of_it_you_press(self):
+        # A hat is one control. Pressing all four directions to show a
+        # finger gets there used to write the same spot four times: the
+        # round counted buttons, and `access` is a list it appends to.
+        dev = fake.devices()[0]
+        hat = next(g for g in dev.groups(bindable=True)
+                   if len(g.buttons) == 4)
+        got = capture.reached_ids(dev, [('button', b) for b in hat.buttons])
+        self.assertEqual([hat.id], got)
+
+    def test_and_a_ministick_counts_once_for_both_its_axes(self):
+        dev = fake.devices()[0]
+        stick = next(g for g in dev.groups(bindable=True)
+                     if len(g.axes) == 2)
+        got = capture.reached_ids(dev, [('axis', a) for a in stick.axes])
+        self.assertEqual([stick.id], got)
+
+    def test_a_button_no_control_owns_yet_records_nothing(self):
+        # A reach is a fact about a control, and there is not one here.
+        fresh = fake.device(kind='stick',
+                            groups=[fake.group('unknown', [0, 1, 2])])
+        self.assertEqual([], capture.reached_ids(fresh, [('button', 0)]))
+
+    def test_but_it_is_said_on_the_screen_rather_than_dropped(self):
+        # Silence reads as a press the program did not see, and the
+        # answer is to go and describe the thing -- which you cannot do
+        # if you do not know it needs it.
+        fresh = fake.device(kind='stick',
+                            groups=[fake.group('unknown', [0, 1, 2])])
+        self.assertEqual([('button', 0)],
+                         capture.unplaced(fresh, [('button', 0)]))
+
+    def test_a_button_with_nothing_attached_gets_no_reach(self):
+        # It is a control in the file and not one under your hand, and
+        # `_hands_off` already leaves it alone.
+        dev = fake.devices()[0]
+        dead = next(g for g in dev.groups()
+                    if not g.bindable and g.id and g.all_buttons)
+        got = [('button', dead.all_buttons[0])]
+        self.assertEqual([], capture.reached_ids(dev, got))
+        self.assertEqual(got, capture.unplaced(dev, got))
+
+    def test_what_was_placed_is_not_also_called_unplaced(self):
+        dev = fake.devices()[0]
+        one = next(g for g in dev.groups(bindable=True) if g.places)
+        got = [('button', one.buttons[0])]
+        self.assertEqual([one.id], capture.reached_ids(dev, got))
+        self.assertEqual([], capture.unplaced(dev, got))
+
+    def test_the_same_stray_press_is_listed_once(self):
+        fresh = fake.device(kind='stick', groups=[fake.group('unknown', [0])])
+        self.assertEqual([('button', 0)],
+                         capture.unplaced(fresh, [('button', 0)] * 3))
+
+
+class TheReachPanelIsToldHowMuchRoomItHas(unittest.TestCase):
+    """Otherwise it lists everything into a panel that shows twelve
+    lines, and what falls off the bottom is written and never read."""
+
+    class Browsed:
+        def __init__(self, h=16, w=80):
+            self.scr = fake.Screen(h, w)
+            self.kw = {}
+
+        def halves(self, h, w, least=34):
+            # The real arithmetic, so the room this reports is the room
+            # the screen would actually have.
+            return tui.Tui(self.scr, tui.Theme(False)).halves(h, w, least)
+
+        def browse(self, title, lines, side, **kw):
+            self.kw = dict(kw, lines=lines, side=side)
+            return None, 0
+
+    def panel(self):
+        dev = fake.devices()[0]
+        prof = fake.rig(dev)
+        t = self.Browsed()
+        capture.ask_reach(t, None, dev, prof)
+        return t, dev
+
+    def test_whatever_it_hands_back_fits(self):
+        # As many controls as one finger plausibly reaches. Past what the
+        # panel can hold nothing can fit, and then it overflows rather
+        # than dropping one -- see the screens tests for that.
+        t, dev = self.panel()
+        room = t.halves(*t.scr.getmaxyx())[1][2] - 2
+        every = [g.id for g in dev.groups(bindable=True) if g.id][:room - 4]
+        lvl = q.read().vocabulary['level'][0]
+        with mock.patch.object(screens, '_round_at',
+                               lambda *a: screens.Round(lvl, 'thumb',
+                                                        every, True)):
+            _head, said = t.kw['side'](1)
+        self.assertLessEqual(len(said), room)
+        self.assertGreater(len(said), len(every), 'nothing but the list')
+
+    def test_and_still_names_every_control(self):
+        t, dev = self.panel()
+        room = t.halves(*t.scr.getmaxyx())[1][2] - 2
+        every = [g.id for g in dev.groups(bindable=True) if g.id][:room - 4]
+        lvl = q.read().vocabulary['level'][0]
+        with mock.patch.object(screens, '_round_at',
+                               lambda *a: screens.Round(lvl, 'thumb',
+                                                        every, True)):
+            _head, said = t.kw['side'](1)
+        named = {g.id: g.label or g.kind for g in dev.groups(bindable=True)}
+        shown = '\n'.join(text for _tone, text in said)
+        for ctrl in every:
+            with self.subTest(ctrl=ctrl):
+                self.assertIn(named[ctrl], shown)
+
+
+class APressWithNowhereToGo(unittest.TestCase):
+    """A reach is a fact about a control. A press that belongs to none
+    has nowhere to go, and RETURN would record the round as walked with
+    however much of it happened to be on the map."""
+
+    class Asks:
+        def __init__(self, yes=False):
+            self.yes, self.asked = yes, []
+
+        def confirm(self, title, lines, aside=(), default=True):
+            self.asked.append((title, list(lines), default))
+            return self.yes
+
+    def setUp(self):
+        self.dev = fake.device(kind='stick', groups=[
+            fake.group('button', [0], label='Thumb', id='thumb'),
+            fake.group('unknown', [1, 2])])
+
+    def placed(self):
+        one = self.dev.groups(bindable=True)[0]
+        return [('button', one.buttons[0])]
+
+    def test_nothing_loose_is_not_worth_asking_about(self):
+        tui = self.Asks()
+        self.assertTrue(capture._loose_is_fine(tui, self.dev, self.placed()))
+        self.assertEqual([], tui.asked)
+
+    def test_a_loose_press_stops_and_names_it(self):
+        tui = self.Asks(yes=False)
+        self.assertFalse(capture._loose_is_fine(
+            tui, self.dev, self.placed() + [('button', 1)]))
+        _title, lines, _default = tui.asked[0]
+        self.assertIn('button 1', '\n'.join(lines))
+
+    def test_and_saying_yes_lets_the_round_through(self):
+        tui = self.Asks(yes=True)
+        self.assertTrue(capture._loose_is_fine(
+            tui, self.dev, self.placed() + [('button', 1)]))
+
+    def test_carrying_on_is_never_the_suggested_answer(self):
+        # RETURN must not be the one that loses the work.
+        tui = self.Asks()
+        capture._loose_is_fine(tui, self.dev, [('button', 1)])
+        self.assertFalse(tui.asked[0][2])
+
+    def test_it_says_what_to_do_about_it(self):
+        seen = {}
+
+        class Watches(self.Asks):
+            def confirm(self, title, lines, aside=(), default=True):
+                seen['aside'] = list(aside)
+                return False
+
+        capture._loose_is_fine(Watches(), self.dev, [('button', 1)])
+        self.assertTrue(any('Describe' in t for t in seen['aside']),
+                        seen['aside'])
+
+    def test_the_round_itself_stops_rather_than_writing(self):
+        # Driven end to end: a press nothing owns, then RETURN on the
+        # warning, which suggests going back. Nothing reaches the file.
+        import tempfile
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, 'desk.toml')
+        prof = devicemap.Profile({'name': 'x', 'device': [
+            {'slug': self.dev.slug, 'hand': 'left'}]}, path)
+        capture.write_profile(prof)
+        before = open(path).read()
+
+        read_fd, write_fd = os.pipe()
+        scr = TheRoundCollectorDriven.Feeds(
+            write_fd, [(capture.JS_EVENT_BUTTON, 1, 1)])
+        t = tui.Tui(scr, tui.Theme(False))
+        lvl = q.read().vocabulary['level'][0]
+        one = screens.Round(lvl, 'thumb', [], False)
+        try:
+            got = capture._one_round(t, read_fd, self.dev, prof,
+                                     prof.devices[0], one)
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        self.assertFalse(got)
+        self.assertEqual(before, open(path).read())
+        shutil.rmtree(tmp, ignore_errors=True)

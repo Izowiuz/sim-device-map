@@ -23,3 +23,31 @@ slug = "virpil-vpc-stick-warbrd-d"
 role = "stick"
 hand = "right"
 leaving_home_releases_flight = true
+rounds = [
+    ["HOME", "thumb"],
+    ["HOME", "index"],
+    ["HOME", "middle"],
+    ["HOME", "ring"],
+    ["HOME", "pinky"],
+    ["EXTENDED", "ring"],
+]
+
+[device.access]
+analogue-brake-lever-on-the-grip = [
+    { part = "stick", level = "HOME", finger = "middle" },
+    { part = "stick", level = "HOME", finger = "ring" },
+    { part = "stick", level = "HOME", finger = "pinky" },
+]
+bottom-thumb-hat                 = [{ part = "stick", level = "HOME", finger = "thumb" }]
+grip-pinky-button                = [{ part = "stick", level = "EXTENDED", finger = "ring" }]
+grip-thumb-hat                   = [{ part = "stick", level = "HOME", finger = "thumb" }]
+main-trigger                     = [{ part = "stick", level = "HOME", finger = "index" }]
+mini-stick                       = [
+    { part = "stick", level = "HOME", finger = "index" },
+    { part = "stick", level = "HOME", finger = "thumb" },
+]
+stick-encoder-and-click          = [{ part = "stick", level = "HOME", finger = "thumb" }]
+thumb-bottom-button              = [{ part = "stick", level = "HOME", finger = "thumb" }]
+thumb-top-button                 = [{ part = "stick", level = "HOME", finger = "thumb" }]
+top-thumb-hat                    = [{ part = "stick", level = "HOME", finger = "thumb" }]
+trigger-initial-lever            = [{ part = "stick", level = "HOME", finger = "index" }]

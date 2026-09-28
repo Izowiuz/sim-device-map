@@ -105,6 +105,7 @@ source = "measured"
 kind   = "latch"
 id     = "trigger-initial-lever"
 label  = "Trigger initial lever"
+hold_ok = true
 source = "measured"
 states = [
     { button = 1, latching = true },
@@ -116,6 +117,7 @@ kind   = "trigger"
 id     = "main-trigger"
 cumulative = true
 label  = "Main trigger"
+hold_ok = true
 source = "measured"
 states = [
     { name = "first",  button = 2 },
@@ -137,6 +139,7 @@ states = [
 kind   = "button"
 id     = "thumb-top-button"
 label  = "Thumb top button"
+hold_ok = true
 source = "measured"
 states = [
     { button = 6 },
@@ -168,6 +171,7 @@ states = [
 kind   = "hat4"
 id     = "bottom-thumb-hat"
 label  = "Bottom thumb hat"
+hold_ok = true
 source = "measured"
 states = [
     { name = "up",    button = 14, direction = "up" },

@@ -774,15 +774,50 @@ class TheReachRounds(unittest.TestCase):
         self.assertTrue(next(r for r in rounds if r.finger == 'thumb'
                              and r.level is lvl).done)
 
-    def test_a_long_round_does_not_run_off_the_panel(self):
+    def test_every_control_it_found_is_listed(self):
+        # `and 3 more` is the one thing on this panel you cannot act on.
         lvl = self.sheet.vocabulary['level'][0]
         every = [g.id for g in self.dev.groups(bindable=True) if g.id]
-        self.assertGreater(len(every), screens.SHOWN)
+        named = {g.id: g.label or g.kind
+                 for g in self.dev.groups(bindable=True)}
         _h, said = screens.reach_side(
-            self.dev, [screens.Round(lvl, 'thumb', every, True)], 1, [])
-        shown = [t for _tone, t in said]
-        self.assertTrue(any(f'{len(every) - screens.SHOWN} more' in t
-                            for t in shown))
+            self.dev, [screens.Round(lvl, 'thumb', every, True)], 1, [],
+            room=12)
+        shown = '\n'.join(t for _tone, t in said)
+        self.assertNotIn('more', shown)
+        for ctrl in every:
+            with self.subTest(ctrl=ctrl):
+                self.assertIn(named[ctrl], shown)
+
+    def test_the_explanation_gives_way_before_the_list_does(self):
+        lvl = self.sheet.vocabulary['level'][0]
+        every = [g.id for g in self.dev.groups(bindable=True) if g.id][:7]
+        one = [screens.Round(lvl, 'thumb', every, True)]
+        roomy = screens.reach_side(self.dev, one, 1, [], room=99)[1]
+        tight = screens.reach_side(self.dev, one, 1, [], room=12)[1]
+        self.assertGreater(len(roomy), len(tight))
+        hint = (lvl.get('hint') or [''])[0]
+        self.assertIn(hint, [t for _tone, t in roomy])
+        self.assertNotIn(hint, [t for _tone, t in tight])
+        # The posture is cheaper to lose than the hint, so it is the one
+        # that survives the first squeeze.
+        said = lvl['says']
+        self.assertIn(said[:1].upper() + said[1:],
+                      [t for _tone, t in tight])
+
+    def test_and_what_it_found_survives_either_way(self):
+        # Even past what the panel can hold: it overflows rather than
+        # dropping a control, because the list is the answer and a
+        # shorter one is a wrong answer.
+        lvl = self.sheet.vocabulary['level'][0]
+        every = [g.id for g in self.dev.groups(bindable=True) if g.id]
+        one = [screens.Round(lvl, 'thumb', every, True)]
+        for room in (99, 12, 1):
+            with self.subTest(room=room):
+                said = screens.reach_side(self.dev, one, 1, [], room=room)[1]
+                self.assertEqual(len(every),
+                                 sum(1 for _tone, t in said
+                                     if t.startswith('  ')))
 
     def test_nothing_on_screen_calls_it_a_round(self):
         # A word for the thing that appears nowhere else on the screen:

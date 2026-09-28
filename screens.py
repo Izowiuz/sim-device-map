@@ -222,18 +222,18 @@ def reach_rows(rounds):
     return out
 
 
-#: How many controls a round's panel lists before it counts the rest.
-#: The panel does not scroll, and what runs past its last row is written
-#: and never read.
-SHOWN = 6
-
-
-def reach_side(dev, rounds, at, note):
+def reach_side(dev, rounds, at, note, room=None):
     """(title, [(tone, text)]) for the row the cursor is on.
 
     A posture heading gets the explanation of the whole thing; a round
     gets what it found and what pressing RETURN will do. Neither repeats
     the other, because on this screen you read one of them at a time.
+
+    Everything it found is listed. There used to be a cap with `and 3
+    more` under it, which is the one thing on this panel you cannot act
+    on: the list IS the answer, so where it does not fit the explanation
+    gives way instead -- the hint first, then the posture, both of which
+    the row you are standing on already says.
     """
     one = _round_at(rounds, at)
     if one is None:
@@ -243,23 +243,28 @@ def reach_side(dev, rounds, at, note):
 
     named = {g.id: g.label or g.kind for g in dev.groups(bindable=True)}
     posture = one.level['says']
-    said = [('subhead', posture[:1].upper() + posture[1:])]
-    said += [('meta', t) for t in (one.level.get('hint') or [])]
-    said.append(('plain', ''))
+    head = [('subhead', posture[:1].upper() + posture[1:])]
+    hint = [('meta', t) for t in (one.level.get('hint') or [])]
     if one.found:
-        said.append(('measured', 'Reached this way:'))
-        said += [('plain', f'  {named.get(c, c)}')
-                 for c in one.found[:SHOWN]]
-        if len(one.found) > SHOWN:
-            said.append(('meta', f'  and {len(one.found) - SHOWN} more'))
-        said += [('plain', ''), ('meta', '\u21b5 measures it again.')]
+        body = ([('measured', 'Reached this way:')]
+                + [('plain', f'  {named.get(c, c)}') for c in one.found]
+                + [('plain', ''), ('meta', '↵ measures it again.')])
     else:
-        said.append(('measured' if one.done else 'unset',
-                     'You reached nothing this way.' if one.done
-                     else 'Not done yet.'))
-        said += [('plain', ''),
-                 ('meta', '\u21b5 measures this one.')]
-    return finger_said(one.finger), said
+        body = [('measured' if one.done else 'unset',
+                 'You reached nothing this way.' if one.done
+                 else 'Not done yet.'),
+                ('plain', ''), ('meta', '↵ measures this one.')]
+    return finger_said(one.finger), _as_much_as_fits(head, hint, body, room)
+
+
+def _as_much_as_fits(head, hint, body, room):
+    """The findings, with as much of the explanation as there is space."""
+    for said in (head + hint + [('plain', '')] + body,
+                 head + [('plain', '')] + body,
+                 body):
+        if room is None or len(said) <= room:
+            return said
+    return body
 
 
 def round_prompt(one):
@@ -275,8 +280,8 @@ def round_prompt(one):
             # A round that reaches nothing is an answer, and without this
             # it looks like a screen you can only leave by cancelling.
             + ['If it reaches nothing, just press RETURN.'],
-            f'Press everything the {finger_said(one.finger)} can reach,'
-            ' then RETURN.')
+            f'Press or move everything the {finger_said(one.finger)} can'
+            ' reach, then RETURN.')
 
 
 def next_round_at(rounds, at):

@@ -810,7 +810,8 @@ def ask_reach(tui, fd, dev, prof):
         done = sum(1 for r in rounds if r.done)
         what, at = tui.browse(
             f'Reach — {dev.product}', rows,
-            lambda n: screens.reach_side(dev, rounds, n, note),
+            lambda n: screens.reach_side(dev, rounds, n, note,
+                                         room=_panel_rows(tui)),
             keys=('↑↓ move', '↵ measure', 'ESC done'),
             right=f'{done} of {len(rounds)} done',
             index=at, aside='this round',
@@ -832,12 +833,113 @@ def ask_reach(tui, fd, dev, prof):
             moved = True
 
 
+def collect_reached(tui, fd, dev, title, help_lines, says=''):
+    """Which controls a finger got to, until RETURN. None if cancelled.
+
+    Controls rather than buttons, because a reach is about the thing you
+    put a finger on: a dial, a mini-stick and a lever answer by moving an
+    axis and never close a button at all, so a round that watched only
+    buttons could not find them. Fifteen rounds later they were the ones
+    nothing had reached, and that was written down as OFF -- which said
+    you take your hand off the device for a lever under your thumb.
+    """
+    got, rest = [], axes_at_rest(fd)
+    while True:
+        found = reached_ids(dev, got)
+        named = {g.id: g.label or g.kind for g in dev.groups(bindable=True)}
+        loose = unplaced(dev, got)
+        tui.screen(title,
+                   [('plain', says or 'press or move everything it reaches,'
+                                     ' then RETURN')]
+                   + ([('plain', '')] if got else [])
+                   + [('measured', f'  {named.get(c, c)}') for c in found]
+                   + [('unset', f'  {k} {n} — not a control yet')
+                      for k, n in loose]
+                   + ui.aside_of(help_lines),
+                   ('↵ done', 'ESC cancel'),
+                   ui.plural(len(found), 'control') if found else '')
+        if select.select([fd], [], [], 0.05)[0]:
+            for typ, num, val in _events(fd):
+                if typ & JS_EVENT_BUTTON and val:
+                    got.append(('button', num))
+                elif typ & JS_EVENT_AXIS and add_event([], rest, 0, typ,
+                                                       num, val):
+                    got.append(('axis', num))
+        k = tui.key(0)
+        if k == 'enter':
+            return got
+        if k == 'esc':
+            return None
+
+
+def reached_ids(dev, got):
+    """The control ids behind what a round collected, in the order found.
+
+    Only what you can put an action on. A button the firmware reports
+    with nothing attached is a control in the file and not one under your
+    hand, and `_hands_off` already leaves it alone -- the two disagreeing
+    is how one of them ends up writing a reach for a dead contact.
+    """
+    out = []
+    for kind, num in got:
+        g = dev.group_of(num) if kind == 'button' else dev.axis_group(num)
+        if g is not None and g.id and g.bindable and g.id not in out:
+            out.append(g.id)
+    return out
+
+
+def unplaced(dev, got):
+    """What a round collected that belongs to no control yet.
+
+    Said on the screen rather than dropped. A reach is a fact about a
+    control, so there is nowhere to put this -- but silence reads as a
+    press the program did not see, and the answer is to go and describe
+    the thing, which you cannot do if you do not know it needs it.
+    """
+    out = []
+    for kind, num in got:
+        g = dev.group_of(num) if kind == 'button' else dev.axis_group(num)
+        if (g is None or not g.id or not g.bindable) and (kind, num) not in out:
+            out.append((kind, num))
+    return out
+
+
+def _panel_rows(tui):
+    """How many lines the detail half of a browse can show."""
+    h, w = tui.scr.getmaxyx()
+    return tui.halves(h, w)[1][2] - 2
+
+
+def _loose_is_fine(tui, dev, got):
+    """Say what this round cannot write down, and let you go back.
+
+    A reach is a fact about a control, so a press that belongs to none is
+    a press with nowhere to go. Saying that on the round's own screen is
+    not enough: RETURN then records the round as walked, and what it
+    found is however much of it happened to be on the map -- so the work
+    is lost quietly, and the finger has to be walked again to get it
+    back, which nothing tells you.
+    """
+    loose = unplaced(dev, got)
+    if not loose:
+        return True
+    return bool(tui.confirm(
+        f'{ui.plural(len(loose), "press")} with no control',
+        [', '.join(f'{k} {n}' for k, n in loose), '',
+         'Nothing is written down for these.'],
+        ['Describe them on the list first -- press `n`, or RETURN on the'
+         ' row they are in -- then walk this finger again.',
+         'Saying yes keeps whatever else this round reached.'],
+        default=False))
+
+
 def _one_round(tui, fd, dev, prof, said, one):
     """Walk one round and write what it found. False if it was cancelled."""
-    drain(fd)
     title, aside, says = screens.round_prompt(one)
-    seen, _held = collect_buttons(tui, fd, title, aside, says=says)
-    if seen is None:
+    got = collect_reached(tui, fd, dev, title, aside, says=says)
+    if got is None:
+        return False
+    if not _loose_is_fine(tui, dev, got):
         return False
     access = said.setdefault('access', {})
     # This round's earlier answers go first: doing it again replaces what
@@ -846,12 +948,10 @@ def _one_round(tui, fd, dev, prof, said, one):
         spots[:] = [sp for sp in spots
                     if not (sp.get('level') == one.level['name']
                             and sp.get('finger') == one.finger)]
-    for b in seen:
-        g = dev.group_of(b)
-        if g is not None and g.id:
-            access.setdefault(g.id, []).append(
-                {'part': _part_of(dev, one.level['name']),
-                 'level': one.level['name'], 'finger': one.finger})
+    for ctrl in reached_ids(dev, got):
+        access.setdefault(ctrl, []).append(
+            {'part': _part_of(dev, one.level['name']),
+             'level': one.level['name'], 'finger': one.finger})
     walked = said.setdefault('rounds', [])
     if [one.level['name'], one.finger] not in walked:
         walked.append([one.level['name'], one.finger])
@@ -1336,8 +1436,13 @@ def reset_grouping(raw, n_buttons):
                                                  for b in all_of(g)})]}]
 
 
-def overview(tui, dev, js, probe=None):
+def overview(tui, dev, js, rig, probe=None):
     """Every control on one device, and how far each has got.
+
+    `rig` is the desk you picked on the way in. Handed down rather than
+    asked for again: the screens that wanted it used to ask the map, and
+    the map cannot answer when there is more than one desk -- so `r` took
+    the whole program down with curses up.
 
     The list IS the progress: what somebody answered for, what is standing
     on what its shape usually is, and what nobody has placed yet. Pressing
@@ -1378,22 +1483,16 @@ def overview(tui, dev, js, probe=None):
                 write_device(dev)
                 dirty = False
             elif got in ('r', 'R'):
-                prof = devicemap.profile()
-                if prof is None:
-                    tui.confirm('No rig on file',
-                                ['Reach is a fact about the desk, so it has',
-                                 'nowhere to go without one.'], [],
-                                default=True)
-                elif ask_reach(tui, fd, dev, prof):
-                    _reload(dev)
+                if ask_reach(tui, fd, dev, rig):
+                    _reload(dev, rig)
             elif got in ('f', 'F'):
                 dirty = ask_facts(tui, fd, dev) or dirty
             elif got in ('a', 'A'):
                 dirty = capture_axis(tui, dev, fd) or dirty
-                _reload(dev)
+                _reload(dev, rig)
             elif got in ('u', 'U'):
                 dirty = _mark_unwired(tui, dev, btns) or dirty
-                _reload(dev)
+                _reload(dev, rig)
             elif got in ('n', 'N') or isinstance(got, int):
                 sel = got if isinstance(got, int) else sel
                 row = rows[got] if isinstance(got, int) else None
@@ -1406,7 +1505,7 @@ def overview(tui, dev, js, probe=None):
                     continue
                 if not _replace(dev, old, build_group(run, old)):
                     continue
-                _reload(dev)
+                _reload(dev, rig)
                 dirty = True
     finally:
         os.close(fd)
@@ -1569,11 +1668,11 @@ def _watch(dev, fd, rows):
     return poll
 
 
-def _reload(dev):
+def _reload(dev, rig):
     """Re-derive the typed view after the raw one moved under it."""
     reconcile(dev._raw, dev.n_buttons)
     dev.__init__(dev._raw, dev.path)
-    dev.under(devicemap.profile())
+    dev.under(rig)
 
 
 def _replace(dev, old, entry):
@@ -1661,10 +1760,11 @@ def edit_rig(tui, prof):
 
 
 def _say_where_it_sits(tui, prof, dev):
-    """Hand, role, and whether letting go of it drops the aircraft."""
+    """Hand, role, and whether letting go of it drops the aircraft.
+
+    `dev` came off the list this desk names, so the entry is there.
+    """
     said = prof.entry(dev.slug)
-    if said is None:
-        return False
     hand = tui.menu(f'{dev.product} — which hand?', list(HANDS),
                     [[f'It sits under your {h} hand.'] for h in HANDS],
                     index=HANDS.index(said['hand']) if said.get('hand')
@@ -1840,7 +1940,7 @@ def tui_main(scr, rig):
                 reset_grouping(dev._raw, m.probe.get('buttons', dev.n_buttons))
                 dev.__init__(dev._raw, dev.path)
 
-        dirty = overview(tui, dev, js, m.probe)
+        dirty = overview(tui, dev, js, rig, m.probe)
         if dirty and tui.confirm(
                 'Unsaved changes',
                 [f'{dev.product} has changes that are not written.', '',
@@ -1914,7 +2014,7 @@ def main():
     if args.list:
         # Under a desk when one can be settled, because how far away a
         # control is is a fact about the desk and not about the device.
-        rig = devicemap.profile(strict=False)
+        rig = devicemap.profile()
         if rig is not None:
             found = [m for m in devicemap.find_connected(rig=rig) if m.device]
         elif devicemap.load_profiles():
@@ -1942,7 +2042,7 @@ def main():
 
     # Which desk, and the devices under it, are both settled inside: the
     # question needs a screen, and the answer changes what is read.
-    curses.wrapper(tui_main, devicemap.profile(strict=False))
+    curses.wrapper(tui_main, devicemap.profile())
 
 
 if __name__ == '__main__':

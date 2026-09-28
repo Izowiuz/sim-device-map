@@ -112,12 +112,6 @@ class WhichRig(unittest.TestCase):
         with self.with_profiles():
             self.assertIsNone(devicemap.profile())
 
-    def test_two_rigs_refuse_to_be_guessed(self):
-        with self.with_profiles('Biurko', 'Fotel'):
-            with self.assertRaises(SystemExit) as caught:
-                devicemap.profile()
-            self.assertIn('Fotel', str(caught.exception))
-
     def test_the_environment_decides(self):
         with self.with_profiles('Biurko', 'Fotel'):
             with mock.patch.dict(os.environ,
@@ -218,30 +212,51 @@ class ADeviceOnNoDesk(unittest.TestCase):
         self.assertEqual('throttle', dev.role)
 
 
-class WhatTheRigHasNotBeenTold(UnderEachRig, unittest.TestCase):
-    """The profile ships with no `access` at all.
+class WhatAMeasuredReachLooksLike(UnderEachRig, unittest.TestCase):
+    """Rules that hold whatever is in the file.
 
-    It used to ship with the old `reach` prose migrated into spots, which
-    meant every screen had a third state for "there is data but nobody
-    measured it" -- and the numbers in this file pinned that migration as
-    if it were a measurement. Both are gone.
+    There were two here saying the profile was empty. True the day the
+    old migration was thrown out, false the day somebody walked a finger
+    -- which is the work this repo exists to collect.
     """
 
-    def test_the_rig_says_nothing_about_reach_yet(self):
-        for rig in devicemap.load_profiles():
-            for said in rig.devices:
-                with self.subTest(slug=said['slug']):
-                    self.assertFalse(said.get('access'))
-
-    def test_so_no_control_has_a_tier(self):
+    def test_a_spot_that_is_there_names_a_place_a_hand_can_be(self):
         for dev in self.under_each_rig():
             for g in dev.groups(bindable=True):
-                with self.subTest(dev=dev.slug, ctrl=g.label):
-                    self.assertIsNone(g.tier)
+                for spot in g.access:
+                    with self.subTest(dev=dev.slug, ctrl=g.id):
+                        self.assertIn(spot.part, devicemap.PARTS)
+                        self.assertIn(spot.level, devicemap.LEVELS)
+                        self.assertIn(spot.finger, ('',) + devicemap.FINGERS)
 
+    def test_a_control_is_as_far_as_its_nearest_way_of_reaching_it(self):
+        for dev in self.under_each_rig():
+            for g in dev.groups(bindable=True):
+                if g.access:
+                    with self.subTest(dev=dev.slug, ctrl=g.id):
+                        self.assertEqual(min(a.tier for a in g.access),
+                                         g.tier)
 
-if __name__ == '__main__':
-    unittest.main()
+    def test_and_one_with_no_way_at_all_has_no_answer(self):
+        for dev in self.under_each_rig():
+            for g in dev.groups(bindable=True):
+                if not g.access:
+                    with self.subTest(dev=dev.slug, ctrl=g.id):
+                        self.assertIsNone(g.tier)
+
+    def test_a_walked_finger_is_written_down_as_walked(self):
+        # `rounds` is what tells a walk that found nothing from one
+        # nobody has done, so every spot a walk wrote has to have one.
+        for rig in devicemap.load_profiles():
+            for said in rig.devices:
+                walked = {tuple(r) for r in said.get('rounds') or []}
+                for ctrl, spots in (said.get('access') or {}).items():
+                    for spot in spots:
+                        if spot.get('finger'):
+                            with self.subTest(slug=said['slug'], ctrl=ctrl):
+                                self.assertIn((spot['level'],
+                                               spot['finger']), walked)
+
 
 
 class WhichDeskThisIs(unittest.TestCase):
@@ -269,25 +284,21 @@ class WhichDeskThisIs(unittest.TestCase):
     def test_none_on_file_is_not_an_error(self):
         self.assertIsNone(self.profile([]))
 
-    def test_two_rigs_stop_a_caller_that_cannot_ask(self):
-        with self.assertRaises(SystemExit):
-            self.profile(['Biurko', 'Fotel'])
+    def test_two_rigs_and_nothing_saying_which_is_no_answer(self):
+        # Not an error either. This used to raise, which took the whole
+        # program down from whatever screen asked the question -- `r` in
+        # the capture wizard did it with curses up.
+        self.assertIsNone(self.profile(['Biurko', 'Fotel']))
 
-    def test_but_not_one_that_can(self):
-        self.assertIsNone(self.profile(['Biurko', 'Fotel'], strict=False))
+    def test_naming_it_settles_it(self):
+        got = self.profile(['Biurko', 'Fotel'], name='Fotel')
+        assert got is not None
+        self.assertEqual('Fotel', got.name)
 
-    def test_naming_it_settles_it_either_way(self):
-        for strict in (True, False):
-            with self.subTest(strict=strict):
-                got = self.profile(['Biurko', 'Fotel'], name='Fotel',
-                                   strict=strict)
-                assert got is not None
-                self.assertEqual('Fotel', got.name)
-
-    def test_a_name_nothing_answers_to_is_an_error_even_when_it_can_ask(self):
+    def test_a_name_nothing_answers_to_is_an_error(self):
         # A rig you named and have not got is a typo, not a question.
         with self.assertRaises(SystemExit):
-            self.profile(['Biurko'], name='Fotel', strict=False)
+            self.profile(['Biurko'], name='Fotel')
 
 
 class ReadingDevicesUnderAGivenRig(unittest.TestCase):

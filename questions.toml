@@ -124,7 +124,7 @@ note = "What you would call it looking at the device."
 id    = "reach"
 of    = "device"
 how   = "rounds"
-says  = "Press everything you can reach from here."
+says  = "Press or move everything you can reach from here."
 sets  = "access"
 uses  = "level"
 # No count in here and none generated for the screen either. A number of

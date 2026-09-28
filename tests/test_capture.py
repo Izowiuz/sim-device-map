@@ -2219,3 +2219,116 @@ class TheWidgetThatSweepsTheAxes(unittest.TestCase):
     def test_backing_out_of_the_first_leaves_the_walk(self):
         got, _dev, _tui = self.swept('dial', [], ['esc'])
         self.assertIsNone(got)
+
+
+class NoTwoControlsClaimTheSameAxis(unittest.TestCase):
+    """`_replace` compared buttons and never axes, so a control given an
+    axis left whatever held it before still claiming it -- and the list
+    showed that axis twice, once under each."""
+
+    def dev(self):
+        return fake.device(kind='throttle',
+                           axes=[fake.axis(n) for n in range(3)],
+                           groups=[fake.group('lever', [], label='Left',
+                                              id='left', axes=[0]),
+                                   fake.group('ministick', [], label='Mini',
+                                              id='mini', axes=[1, 2])])
+
+    def axes_now(self, dev):
+        return {g['id']: g.get('axes') for g in dev._raw['group']
+                if g.get('axes')}
+
+    def test_taking_an_axis_takes_it_off_the_other(self):
+        dev = self.dev()
+        capture._replace(dev, None, {'kind': 'dial', 'id': 'new',
+                                     'label': 'New', 'axes': [0]})
+        self.assertEqual({'new': [0], 'mini': [1, 2]}, self.axes_now(dev))
+
+    def test_a_control_that_keeps_some_keeps_them(self):
+        # A mini-stick that lends one axis is still a control, with one
+        # axis fewer -- not one that vanishes.
+        dev = self.dev()
+        capture._replace(dev, None, {'kind': 'dial', 'id': 'new',
+                                     'label': 'New', 'axes': [1]})
+        self.assertEqual({'left': [0], 'new': [1], 'mini': [2]},
+                         self.axes_now(dev))
+
+    def test_one_that_keeps_none_goes(self):
+        dev = self.dev()
+        capture._replace(dev, None, {'kind': 'stick', 'id': 'new',
+                                     'label': 'New', 'axes': [1, 2]})
+        self.assertEqual({'left': [0], 'new': [1, 2]}, self.axes_now(dev))
+
+    def test_and_no_capture_on_file_claims_one_twice(self):
+        for dev in devicemap.load_all(bare=True):
+            seen = {}
+            for g in dev.groups():
+                for n in g.axes:
+                    with self.subTest(dev=dev.slug, axis=n):
+                        self.assertNotIn(n, seen, f'also {seen.get(n)}')
+                        seen[n] = g.id
+
+
+class WhatCountsAsPointingAtAnAxis(unittest.TestCase):
+    """Axes drift, and a lever parked off centre reports on every open.
+    Taking any of that for `you moved this` makes the corner answer a
+    question nobody asked, over and over."""
+
+    def polled(self, moves):
+        dev = fake.device(kind='throttle', axes=[fake.axis(0)],
+                          groups=[fake.group('lever', [], label='Lever',
+                                             id='lever', axes=[0])])
+        rows = screens.control_rows(dev.under(None))
+        read_fd, write_fd = os.pipe()
+        poll = capture._watch(dev, read_fd, rows)
+        out = []
+        try:
+            for val in moves:
+                os.write(write_fd, struct.pack('<IhBB', 0, val,
+                                               capture.JS_EVENT_AXIS, 0))
+                out.append(poll())
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        return out
+
+    def test_a_twitch_says_nothing(self):
+        got = self.polled([0, capture.POINTED_AT // 4])
+        self.assertEqual([None, None], got)
+
+    def test_and_a_push_names_the_control(self):
+        got = self.polled([0, capture.POINTED_AT + 1])
+        self.assertIsNotNone(got[-1])
+        at, said = got[-1]
+        self.assertEqual(0, at)
+        self.assertIn('Lever', '\n'.join(t for _tone, t in said))
+
+    def test_it_measures_from_where_it_last_answered(self):
+        # Not from zero: a lever parked at one end is not a lever you
+        # are pushing, and every report after the first would be one.
+        step = capture.POINTED_AT + 1
+        got = self.polled([0, step, step + 10, step * 2 + 20])
+        self.assertIsNone(got[2])
+        self.assertIsNotNone(got[3])
+
+
+class WhatTheShapeCallsOneOfItsAxes(unittest.TestCase):
+    """Out of the descriptor, so the corner says `fore/aft` rather than
+    `y`, and the words are the same ones the walk asked with."""
+
+    def dev(self):
+        return fake.device(kind='stick', axes=[
+            fake.axis(0, role='x'), fake.axis(1, role='y'),
+            fake.axis(2, role='z'), fake.axis(3)],
+            groups=[fake.group('stick', [], label='Stick', id='s',
+                               axes=[0, 1, 2]),
+                    fake.group('lever', [], label='Lever', id='l',
+                               axes=[3])])
+
+    def test_it_names_each_axis_the_way_the_shape_does(self):
+        dev = self.dev()
+        said = [capture._axis_said(dev, n) for n in (0, 1, 2)]
+        self.assertEqual([w for _r, w in capture.axes_of_kind('stick')], said)
+
+    def test_a_shape_with_one_axis_names_no_particular_one(self):
+        self.assertEqual('', capture._axis_said(self.dev(), 3))

@@ -326,7 +326,7 @@ class Tui:
 
     # ---- frames ----
     def box(self, title, lines, keys=(), tail='', top=0, sel=None,
-            full=False, right=''):
+            full=False, right='', head=''):
         """Draw a framed box in the middle of the screen. Returns its page.
 
         `lines` is [(tone, text)], so a caller decides what each row MEANS
@@ -343,11 +343,13 @@ class Tui:
             # is also something a dialog can open over, and that is not a
             # box and cannot be written down as one.
             self._back = partial(self._draw, title, list(lines),
-                                 tuple(keys), tail, 0, None, True, right)
+                                 tuple(keys), tail, 0, None, True, right,
+                                 head)
         elif self._back is not None:
             self._back()
             self._clear_round(title, lines, full)
-        page = self._draw(title, lines, keys, tail, top, sel, full, right)
+        page = self._draw(title, lines, keys, tail, top, sel, full, right,
+                          head)
         self.scr.refresh()
         return page
 
@@ -364,10 +366,17 @@ class Tui:
             self.put(row, max(0, x - 1), ' ')
             self.put(row, min(w - 1, x + bw), ' ')
 
-    def _draw(self, title, lines, keys, tail, top, sel, full, right):
-        """The box itself, on whatever is already there."""
+    def _draw(self, title, lines, keys, tail, top, sel, full, right, head=''):
+        """The box itself, on whatever is already there.
+
+        `head` names the columns. Pinned rather than the first row of the
+        list: a heading that scrolls away is a heading you have to
+        remember, and one you can put the cursor on is a row.
+        """
         h, w = self.scr.getmaxyx()
-        y, x, bh, bw = box_for([t for _tone, t in lines], h, w, title, full)
+        y, x, bh, bw = box_for([t for _tone, t in lines] + ([head] if head
+                                                            else []),
+                               h, w, title, full)
         _at, room = text_in(x, bw)
         lines = [(tone, folded) for tone, text in lines
                  for folded in (fit(room, text) if len(text) > room
@@ -377,11 +386,15 @@ class Tui:
         for n in range(page):
             self.put(y + 1 + n, x, V + ' ' * (bw - 2) + V, self.theme.head)
         self.put(y + bh - 1, x, sill(bw, keys, tail), self.theme.head)
+        at, room = text_in(x, bw)
+        off = 0
+        if head:
+            self.put(y + 1, at, head[:room], self.theme.meta)
+            page, off = page - 1, 1
         for n, (tone, text) in enumerate(lines[top:top + page]):
             lit = (self.theme.sel if sel is not None and top + n == sel
                    else self.theme[tone])
-            at, room = text_in(x, bw)
-            self.put(y + 1 + n, at, text[:room], lit)
+            self.put(y + 1 + off + n, at, text[:room], lit)
         return page
 
     def screen(self, title, lines, keys=(), tail='', full=False, right=''):
@@ -551,7 +564,7 @@ class Tui:
                 return
 
     def choose(self, title, lines, tail='', index=0, keys=None, full=False,
-               takes=(), right='', poll=None, corner=''):
+               takes=(), right='', poll=None, corner='', head=''):
         """A box you pick a line out of.
 
         The index picked, or None on ESC, or one of `takes` -- a key that is
@@ -571,7 +584,8 @@ class Tui:
                     if at is not None:
                         sel = at
             h, w = self.scr.getmaxyx()
-            page = box_for([t for _, t in lines], h, w, title, full)[2] - 2
+            page = box_for([t for _, t in lines] + ([head] if head else []),
+                           h, w, title, full)[2] - 2 - bool(head)
             sel = max(0, min(sel, len(lines) - 1))
             if sel < top:
                 top = sel
@@ -580,7 +594,7 @@ class Tui:
             self.box(title, lines,
                      keys or ('↑↓ move', '↵ choose', 'ESC back'),
                      tail or f'{sel + 1} of {len(lines)}', top, sel, full,
-                     right=right)
+                     right=right, head=head)
             self.corner(corner, shown)
             self.scr.refresh()
             k = self.key(0.1 if poll is not None else 0.5)

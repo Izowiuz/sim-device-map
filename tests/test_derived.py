@@ -277,15 +277,14 @@ class OnePieceOfPlasticIsOneControl(unittest.TestCase):
             with self.subTest(role=role):
                 self.assertIsNotNone(dev.axis_of('stick', role))
 
-    def test_no_kind_names_one_axis_of_another_control(self):
+    def test_which_axis_of_a_control_is_not_a_kind(self):
         # `stick-x` and `twist` each said a control's kind and which axis
         # of it in one word, so each said the first of them twice -- and
         # made one piece of plastic into two controls to say it about.
-        # Not a test about spelling: `twist` carries no `-x` and was the
-        # same mistake.
+        # Which axis it is lives on the shape now, as a list of what each
+        # is called, and there is nowhere to say it as a kind.
         import questions as q
-        parts = {c['name'] for c in q.read().vocabulary['axis_kind']
-                 if c.get('role')}
-        self.assertTrue(parts)
-        self.assertFalse(parts & set(devicemap.KINDS),
-                         sorted(parts & set(devicemap.KINDS)))
+        for c in q.read().vocabulary['kind']:
+            for said in c.get('axes') or []:
+                with self.subTest(kind=c['name'], axis=said):
+                    self.assertNotIn(said, devicemap.KINDS)

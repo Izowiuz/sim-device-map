@@ -1610,16 +1610,18 @@ def states_of(kind, places, names=(), directional=False, contacts=(),
 def axes_of_kind(kind):
     """[(role, what to call it)] -- the axes a control of this kind has.
 
-    Out of the descriptor, in role order. A count in a signature and a
-    pair of words in a list could say `two` and nothing else; a stick has
-    three and a dial one, and both are said in the same place as what
-    each of them is called.
+    Out of the shape's own entry, in role order: `axes` there says how
+    many it has and what each is called, the way `dirs` says what a hat's
+    positions are called. A count in a signature and a pair of words in a
+    list could say `two` and nothing else.
+
+    No role where the shape has one axis: a lever's is not `the x one`.
     """
-    got = [(c.get('role', ''), c['says'])
-           for c in SHEET.vocabulary.get('axis_kind', ())
-           if c.get('makes', c['name']) == kind]
-    return sorted(got, key=lambda r: (devicemap.AXIS_ROLES.index(r[0])
-                                      if r[0] else -1))
+    entry = next((c for c in SHEET.vocabulary.get('kind', ())
+                  if c['name'] == kind), None)
+    said = (entry or {}).get('axes') or []
+    return [(devicemap.AXIS_ROLES[n] if len(said) > 1 else '', one)
+            for n, one in enumerate(said)]
 
 
 def _slot_of(ways, role):
@@ -1633,10 +1635,9 @@ def _kind_said(kind):
     Either vocabulary: a control's shape and what a lone axis makes are
     two lists and a kind may be in either.
     """
-    for voc in ('kind', 'axis_kind'):
-        for c in SHEET.vocabulary.get(voc, ()):
-            if c.get('makes', c['name']) == kind:
-                return c['says'].split(' (')[0].split(',')[0]
+    for c in SHEET.vocabulary.get('kind', ()):
+        if c['name'] == kind:
+            return c['says'].split(' (')[0].split(',')[0]
     return kind
 
 
@@ -1744,6 +1745,7 @@ def overview(tui, dev, js, rig, probe=None):
                 dev.product, [(r.tone, r.text) for r in rows],
                 index=min(sel, max(0, len(rows) - 1)), full=True,
                 keys=screens.sill_keys(), takes=screens.takes(),
+                head=screens.control_head(),
                 poll=_watch(dev, fd, rows), corner='pressed',
                 right=f'{len(rows) - left}/{len(rows)} done · '
                       f'{len(dev.axes())}/{dev.n_axes} axes'
@@ -1935,13 +1937,26 @@ _COUPLING_SAID = {
 }
 
 
+#: How far an axis has to move from where the list found it before it
+#: counts as you pointing at it. Axes drift and a lever parked off centre
+#: reports on every open; a twelfth of full scale is past both and well
+#: short of a deliberate nudge.
+POINTED_AT = 4000
+
+
 def _watch(dev, fd, rows):
-    """Watch the hardware while the list is up: what was that button?
+    """Watch the hardware while the list is up: what was that?
 
     The list answers "which button is this row". This answers the same
     question from the other end, which is the one you actually have -- a
-    piece of plastic under your thumb and no idea what it is called.
+    piece of plastic under your hand and no idea what it is called.
+
+    Axes as well as buttons. A throttle lever is the one thing you cannot
+    press to find out what it is, and the corner said nothing when you
+    moved one.
     """
+    start: dict[int, int] = {}
+
     def poll():
         if not select.select([fd], [], [], 0)[0]:
             return None
@@ -1949,8 +1964,24 @@ def _watch(dev, fd, rows):
             if typ & JS_EVENT_BUTTON and val:
                 return (screens.row_of(rows, dev, num),
                         screens.what_is(dev, num))
+            if typ & JS_EVENT_AXIS:
+                was = start.setdefault(num, val)
+                if abs(val - was) < POINTED_AT:
+                    continue
+                start[num] = val
+                return (screens.row_of_axis(rows, dev, num),
+                        screens.what_moved(dev, num, _axis_said(dev, num)))
         return None
     return poll
+
+
+def _axis_said(dev, index):
+    """What the shape calls this one of its axes, out of the descriptor."""
+    a, g = dev.axis(index), dev.axis_group(index)
+    if a is None or g is None or not a.role:
+        return ''
+    ways = axes_of_kind(g.kind)
+    return next((said for role, said in ways if role == a.role), '')
 
 
 def _reload(dev, rig):
@@ -1971,19 +2002,33 @@ def _replace(dev, old, entry):
         return False
     raw = dev._raw
     claimed = set(all_of(entry))
+    # Axes as well as buttons. This compared only buttons, so a control
+    # given an axis left whatever held it before still claiming it --
+    # and the list showed the axis twice, once under each.
+    mine = set(entry.get('axes') or [])
     # Noted before anything is taken out, because the thing being looked
     # for is exactly the thing about to go.
     where = next((n for n, g in enumerate(raw['group'])
                   if entry.get('id') and g.get('id') == entry.get('id')),
                  None)
     for g in list(raw['group']):
-        if g is not entry and (claimed & set(all_of(g))
-                               or (entry.get('id')
-                                   and g.get('id') == entry.get('id'))):
-            if g.get('status') == 'uncaptured':
-                set_buttons(g, [b for b in buttons_of(g) if b not in claimed])
-            else:
-                raw['group'].remove(g)
+        if g is entry:
+            continue
+        same = entry.get('id') and g.get('id') == entry.get('id')
+        took = claimed & set(all_of(g))
+        if not (same or took or mine & set(g.get('axes') or [])):
+            continue
+        if g.get('status') == 'uncaptured':
+            set_buttons(g, [b for b in buttons_of(g) if b not in claimed])
+            continue
+        # It keeps whatever this one did not take. Only when nothing is
+        # left of it does it go: a mini-stick that lends one axis to a
+        # lever is still a control, with one axis fewer.
+        left = [n for n in (g.get('axes') or []) if n not in mine]
+        if not same and not took and left:
+            g['axes'] = left
+            continue
+        raw['group'].remove(g)
     # Back where it was rather than at the end: the file is sorted on the
     # way out, but the list you are looking at is not, and a control that
     # jumps to the bottom when you describe it loses your place.

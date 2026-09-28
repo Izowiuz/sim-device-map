@@ -50,6 +50,9 @@ evdev  = "ABS_X"
 hid    = "X"
 rest   = "centred"
 role   = "x"
+stepped = false
+range  = 65534
+noise  = 0
 
 [[axis]]
 index  = 1
@@ -58,6 +61,8 @@ hid    = "Y"
 rest   = "centred"
 role   = "y"
 stepped = false
+range  = 65534
+noise  = 0
 
 [[axis]]
 index  = 2
@@ -67,6 +72,8 @@ rest   = "mid"
 stepped = false
 moves_with = [3]
 coupling = "switchable"
+range  = 65534
+noise  = 0
 
 [[axis]]
 index  = 3
@@ -76,6 +83,8 @@ rest   = "mid"
 stepped = false
 moves_with = [2]
 coupling = "switchable"
+range  = 65534
+noise  = 0
 note   = """MEASURED 2026-09-17 with probe.py: 52 consecutive pairs, identical values, 0.00s apart every time -- so while the catch is engaged the right lever is spare only in the file. THIS IS A MODE, not a property: the levers uncouple. Splitting them is what makes the per-engine Thrust Left / Thrust Right split in DCS actually do something; joined, both engines get the same number. War Thunder pitch trim went here once and trimmed on every power change."""
 
 [[axis]]
@@ -84,12 +93,17 @@ evdev  = "ABS_RZ"
 hid    = "Rz"
 rest   = "min"
 stepped = false
+range  = 65534
+noise  = 0
 
 [[axis]]
 index  = 5
 evdev  = "ABS_THROTTLE"
 hid    = "Slider"
 rest   = "min"
+stepped = false
+range  = 65534
+noise  = 0
 note   = "Resting at minimum makes it safe for an axis where zero means off."
 
 [[axis]]
@@ -97,6 +111,9 @@ index  = 6
 evdev  = "ABS_RUDDER"
 hid    = "Dial"
 rest   = "centred"
+stepped = false
+range  = 65534
+noise  = 0
 note   = """HID calls it a Dial, so it is a rotary rather than a lever -- the best home for a trim axis. Unconfirmed whether it is an absolute pot or an endless encoder; an endless one would not suit an absolute axis."""
 
 # ------------------------------------------------------------------ buttons
@@ -117,7 +134,7 @@ kind   = "lever"
 id     = "left-throttle-lever"
 axes   = [2]
 label  = "Left throttle lever"
-hold_ok = false
+hold_ok = true
 rapid_ok = false
 modifier_ok = false
 
@@ -126,7 +143,7 @@ kind   = "lever"
 id     = "right-throttle-lever"
 axes   = [3]
 label  = "Right throttle lever"
-hold_ok = false
+hold_ok = true
 rapid_ok = false
 modifier_ok = false
 
@@ -167,7 +184,7 @@ states = [
 kind   = "hat4"
 id     = "middle-finger-hat"
 label  = "Middle finger hat"
-blind_distinct = 2
+blind_distinct = 0
 hold_ok = true
 rapid_ok = false
 modifier_ok = true
@@ -218,7 +235,7 @@ kind   = "ministick"
 id     = "thumb-mini-stick"
 axes   = [0, 1]
 label  = "Thumb mini-stick"
-blind_distinct = 2
+blind_distinct = 0
 hold_ok = true
 rapid_ok = true
 modifier_ok = false

@@ -409,18 +409,14 @@ class TheDescriptorMayNotOfferWhatTheReaderRefuses(unittest.TestCase):
             self.read(self.sheet('kind', 'wobbler'))
         self.assertIn('wobbler', str(caught.exception))
 
-    def test_an_axis_kind_it_never_heard_of(self):
-        with self.assertRaises(ValueError):
-            self.read(self.sheet('axis_kind', 'flapper'))
-
     def test_and_the_real_descriptor_agrees_with_the_reader(self):
         sheet = q.read()
         import devicemap
         self.assertTrue({c['name'] for c in sheet.vocabulary['kind']}
                         <= set(devicemap.KINDS))
-        self.assertTrue({c.get('makes', c['name'])
-                         for c in sheet.vocabulary['axis_kind']}
-                        <= set(devicemap.KINDS))
+        # One list of shapes, and the ones that own axes say so on their
+        # own entry rather than in a second vocabulary beside it.
+        self.assertTrue(any(c.get('axes') for c in sheet.vocabulary['kind']))
 
 
 class AScaleIsStoredAsItsNumber(unittest.TestCase):
@@ -636,53 +632,40 @@ class AVocabularyEntryMayNotSayWhatNothingReads(unittest.TestCase):
                     self.assertFalse(set(c) - set(q.ENTRY_KEYS))
 
 
-class WhatAnAxisMenuEntryMakes(unittest.TestCase):
-    """An entry is a way of saying what you just moved. What it MAKES is
-    the control, and the two are not the same: `stick-x` is one axis of a
-    `stick`, the way `up` is one direction of a `hat4`."""
 
-    def sheet(self, entry):
-        out = ['[[ask]]', 'id = "x"', 'of = "control"', 'how = "pick"',
-               'says = "?"', 'sets = "kind"', 'uses = "axis_kind"',
-               '[[vocabulary.axis_kind]]']
-        for k, v in entry.items():
-            out.append(f'{k} = "{v}"')
-        return '\n'.join(out) + '\n' + LEVELS_TOML
 
-    def read(self, entry):
-        import tempfile
-        with tempfile.NamedTemporaryFile('w', suffix='.toml',
-                                         delete=False) as fh:
-            path = fh.name
-            fh.write(self.sheet(entry))
-        try:
-            return q.read(path)
-        finally:
-            os.unlink(path)
+class EveryQuestionAnswersTheSameWayRound(unittest.TestCase):
+    """Pressing a control walks its answers. Three of the five started at
+    `yes` and two at `no`, so the same gesture meant opposite things
+    depending on which question was up."""
 
-    def test_it_must_make_a_kind_the_reader_accepts(self):
-        with self.assertRaises(ValueError) as caught:
-            self.read({'name': 'flap-x', 'says': 'a flap',
-                       'makes': 'flapper', 'role': 'x'})
-        self.assertIn('flapper', str(caught.exception))
+    def first(self, ask, sheet):
+        picks = sheet.choices(ask)
+        return picks[0]['says'] if picks else 'yes'
 
-    def test_which_axis_of_it_goes_with_which_control_it_makes(self):
-        for entry in ({'name': 'a', 'says': 's', 'makes': 'stick'},
-                      {'name': 'a', 'says': 's', 'role': 'x'}):
-            with self.subTest(entry=entry):
-                with self.assertRaises(ValueError):
-                    self.read(entry)
+    def test_the_affirmative_comes_first_everywhere(self):
+        sheet = q.read()
+        for a in sheet.of(q.ALL):
+            with self.subTest(ask=a.id):
+                self.assertEqual('yes', self.first(a, sheet))
 
-    def test_a_role_nothing_knows(self):
-        with self.assertRaises(ValueError):
-            self.read({'name': 'a', 'says': 's', 'makes': 'stick',
-                       'role': 'sideways'})
+    def test_and_the_scale_still_sorts_the_other_way(self):
+        # The order is what the screen offers; `value` is what sorts. A
+        # control you can find at once scores above one you cannot,
+        # whichever end the walk starts from.
+        sheet = q.read()
+        said = {c['says']: q.stored(c)
+                for c in sheet.vocabulary['yes_somewhat_no']}
+        self.assertLess(said['no'], said['somewhat'])
+        self.assertLess(said['somewhat'], said['yes'])
 
-    def test_an_entry_that_is_the_whole_control_needs_neither(self):
-        self.read({'name': 'lever', 'says': 'a lever'})
-
-    def test_the_real_descriptor_makes_only_real_kinds(self):
-        import devicemap
-        for c in q.read().vocabulary['axis_kind']:
-            with self.subTest(entry=c['name']):
-                self.assertIn(c.get('makes', c['name']), devicemap.KINDS)
+    def test_and_nothing_is_still_the_way_round(self):
+        # Round the end is no answer at all, because a control you
+        # touched by mistake has to be able to go back to unanswered.
+        sheet = q.read()
+        for a in sheet.of(q.ALL):
+            picks = sheet.choices(a)
+            answers = ([q.stored(c) for c in picks] if picks
+                       else [True, False])
+            with self.subTest(ask=a.id):
+                self.assertEqual(len(answers), len(set(answers)))

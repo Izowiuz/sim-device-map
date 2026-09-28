@@ -425,3 +425,36 @@ class TheFrameCounterCanBeLive(unittest.TestCase):
         said = iter(['first', 'second', 'third'])
         got = self.drawn(lambda: next(said))
         self.assertIn('first', got)
+
+
+class AHeadingPinnedInTheFrame(unittest.TestCase):
+    """Not the first row of the list: one that scrolls away is one you
+    have to remember, and one you can put the cursor on is a row."""
+
+    def drawn(self, head='', rows=30, h=12):
+        scr = fake.Screen(h, 60)
+        t = tui.Tui(scr, tui.Theme(False))
+        lines = [('plain', f'row {n}') for n in range(rows)]
+        t.box('title', lines, ('k',), '', top=10, sel=12, full=True,
+              head=head)
+        return [''.join(r).rstrip() for r in scr.rows]
+
+    def test_it_is_there_when_asked_for(self):
+        self.assertTrue(any('control  has' in r for r in
+                            self.drawn('control  has')))
+
+    def test_and_not_when_it_is_not(self):
+        self.assertFalse(any('control  has' in r for r in self.drawn()))
+
+    def test_it_sits_above_the_rows_however_far_down_you_are(self):
+        # Scrolled to row 10 and the heading is still the first line in
+        # the box: that is the whole use of it.
+        said = [r for r in self.drawn('control  has') if r.strip()]
+        head = next(n for n, r in enumerate(said) if 'control  has' in r)
+        first = next(n for n, r in enumerate(said) if 'row 1' in r)
+        self.assertLess(head, first)
+
+    def test_it_costs_the_list_one_row(self):
+        with_, without = self.drawn('control  has'), self.drawn()
+        self.assertEqual(1, sum('row ' in r for r in without)
+                         - sum('row ' in r for r in with_))

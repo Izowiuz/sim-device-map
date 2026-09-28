@@ -53,14 +53,11 @@ WIDGETS = ('collect', 'pick', 'tick', 'name', 'press', 'watch', 'sort',
 #:   dirs        the positions it brings with it (a hat knows its own)
 #:   asks_way    it points somewhere and the shape does not say where
 #:   walked      false for a level that is not a round you walk
-#:   makes       the control an axis menu entry produces, where that is
-#:               not the entry itself: `stick-x` makes a `stick`
-#:   role        which axis of that control it is -- x or y
 #:   axes        what each axis of the shape is called, in role order.
 #:               How many there are is how long it is, the way `dirs`
 #:               says how many positions a hat has.
 ENTRY_KEYS = ('name', 'value', 'says', 'hint', 'dirs', 'asks_way',
-              'walked', 'makes', 'role', 'axes')
+              'walked', 'axes')
 
 #: Keys a vocabulary entry carries into the answers beside its own name.
 #: Picking `hat4` says the control has four positions AND what they are
@@ -204,21 +201,6 @@ def check(sheet):
                              f' {len(c["axes"])} axes, and there are only'
                              f' {len(devicemap.AXIS_ROLES)} ways to say'
                              ' which is which')
-    # An axis menu entry is a way of saying what you just moved, and what
-    # it MAKES is the control. They are not the same: `stick-x` is one
-    # axis of a `stick`, the way `up` is one direction of a `hat4`.
-    for c in sheet.vocabulary.get('axis_kind', ()):
-        makes = c.get('makes', c['name'])
-        if makes not in devicemap.KINDS:
-            raise ValueError(f'axis_kind: {c["name"]!r} makes {makes!r},'
-                             ' which is not a kind')
-        if ('makes' in c) != ('role' in c):
-            raise ValueError(f'axis_kind: {c["name"]!r} says which control'
-                             ' it makes or which axis of it it is, never'
-                             ' one without the other')
-        if 'role' in c and c['role'] not in devicemap.AXIS_ROLES:
-            raise ValueError(f'axis_kind: {c["name"]!r} role = {c["role"]!r};'
-                             f' one of {", ".join(devicemap.AXIS_ROLES)}')
     for name, entries in sheet.vocabulary.items():
         for c in entries:
             odd = sorted(set(c) - set(ENTRY_KEYS))

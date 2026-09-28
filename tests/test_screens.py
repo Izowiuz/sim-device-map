@@ -1649,3 +1649,77 @@ class TheWholeHandReachesThingsToo(unittest.TestCase):
             if r.finger == devicemap.HAND and r.level is lvl)
         self.assertEqual([one.id], got.found)
         self.assertTrue(got.done)
+
+
+class TheCornerAnswersAnAxisToo(unittest.TestCase):
+    """It answered presses and said nothing about axes, so moving a
+    throttle lever -- the one thing on a throttle you cannot press to
+    find out what it is -- left you where you started."""
+
+    def dev(self):
+        return fake.device(kind='throttle', axes=[
+            fake.axis(0, role='x'), fake.axis(1, role='y'), fake.axis(2)],
+            groups=[fake.group('ministick', [], label='Thumb stick',
+                               id='thumb-stick', axes=[0, 1]),
+                    fake.group('lever', [], label='Left lever',
+                               id='left-lever', axes=[2])])
+
+    def said(self, index, called=''):
+        return '\n'.join(t for _tone, t in
+                         screens.what_moved(self.dev(), index, called))
+
+    def test_it_names_the_control_the_axis_belongs_to(self):
+        self.assertIn('Left lever', self.said(2))
+        self.assertIn('axis 2', self.said(2))
+
+    def test_and_which_axis_of_it_where_there_is_more_than_one(self):
+        self.assertIn('horizontal', self.said(0, 'horizontal'))
+
+    def test_the_row_it_points_at_is_the_control_row(self):
+        dev = self.dev()
+        rows = screens.control_rows(dev.under(None))
+        at = screens.row_of_axis(rows, dev, 1)
+        assert at is not None
+        self.assertIs(dev.axis_group(1), rows[at].group)
+
+    def test_both_axes_of_one_control_point_at_the_same_row(self):
+        dev = self.dev()
+        rows = screens.control_rows(dev.under(None))
+        self.assertEqual(screens.row_of_axis(rows, dev, 0),
+                         screens.row_of_axis(rows, dev, 1))
+
+
+class TheColumnsAreNamed(unittest.TestCase):
+    """A heading pinned in the frame, not the first row of the list: one
+    that scrolls away is one you have to remember, and one you can put
+    the cursor on is a row."""
+
+    def setUp(self):
+        self.dev = fake.devices()[0].under(None)
+
+    def test_a_name_for_every_column_a_row_has(self):
+        head = screens.control_head()
+        for _wide, said in screens.COLUMNS:
+            if said:
+                with self.subTest(column=said):
+                    self.assertIn(said, head)
+
+    def test_it_lines_up_with_the_rows(self):
+        # The same widths, from the same tuple: a heading that does not
+        # sit over its column is worse than none.
+        head = screens.control_head()
+        for row in screens.control_rows(self.dev):
+            if row.group is None or not row.group.bindable:
+                continue
+            with self.subTest(row=row.text):
+                for n in (1, 2, 3):
+                    at = sum(w + 1 for w, _s in screens.COLUMNS[:n])
+                    self.assertTrue(head[at:].startswith(
+                        screens.COLUMNS[n][1]))
+                    self.assertNotEqual(' ', row.text[at:at + 1] or 'x')
+
+    def test_it_fits_the_screen_the_list_is_drawn_on(self):
+        scr = fake.Screen(24, 80)
+        t = ui.Tui(scr, ui.Theme(False))
+        room = ui.text_in(*ui.box_for([], 24, 80, 'x', True)[1::2])[1]
+        self.assertLessEqual(len(screens.control_head()), room)

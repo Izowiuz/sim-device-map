@@ -337,72 +337,6 @@ says = "an axis, nothing more said"
 axes = ["end to end"]
 hint = ["It reports an axis and nobody has said what it is."]
 
-# What an axis is. The names are closed by `devicemap.AXIS_KINDS`, which is
-# what the reader checks a file against; the words live here because this is
-# where the screen gets them.
-
-[[vocabulary.axis_kind]]
-name = "stick-x"
-says = "main stick, left/right"
-makes = "stick"
-role = "x"
-hint = ["The flying axis. One of the two the stick has."]
-
-[[vocabulary.axis_kind]]
-name = "stick-y"
-says = "main stick, fore/aft"
-makes = "stick"
-role = "y"
-hint = ["The flying axis. Wants inverting.",
-        "One of the two the stick has."]
-
-[[vocabulary.axis_kind]]
-name = "twist"
-says = "stick twist"
-makes = "stick"
-role = "z"
-hint = ["Self-centring. Usually rudder.",
-        "The third axis of the stick, not a control of its own."]
-
-[[vocabulary.axis_kind]]
-name = "mini-stick-x"
-says = "mini-stick, horizontal"
-makes = "ministick"
-role = "x"
-hint = ["Self-centring thumb stick.", "Wants a view, cue or aim pair."]
-
-[[vocabulary.axis_kind]]
-name = "mini-stick-y"
-says = "mini-stick, vertical"
-makes = "ministick"
-role = "y"
-hint = ["Self-centring thumb stick.", "Wants a view, cue or aim pair."]
-
-[[vocabulary.axis_kind]]
-name = "lever"
-says = "lever"
-hint = ["Stays where you leave it. Throttle, collective."]
-
-[[vocabulary.axis_kind]]
-name = "slider"
-says = "slider"
-hint = ["Resting at minimum makes zero mean off."]
-
-[[vocabulary.axis_kind]]
-name = "dial"
-says = "rotary dial"
-hint = ["Turns. The nicest home for a trim axis."]
-
-[[vocabulary.axis_kind]]
-name = "pedal"
-says = "pedal"
-hint = ["Rudder, or a toe brake."]
-
-[[vocabulary.axis_kind]]
-name = "wheel"
-says = "wheel"
-hint = ["A steering wheel."]
-
 [[vocabulary.axis]]
 name = "up_down"
 says = "up and down"
@@ -452,18 +386,23 @@ hint = ["Nothing on the device reaches it: you take your hand away."]
 # only what the screen prints. One table, because "can you find it" and "can
 # it be pressed by mistake" take the same three answers, and two copies of
 # three words is two copies that drift.
+#
+# The affirmative first, because that is the order pressing a control walks
+# them in -- and a yes/no question answers `yes` on the first press. Listed
+# the other way round, two of the five ran backwards against the other
+# three. The order here is what the screen offers; `value` is what sorts.
 
 [[vocabulary.yes_somewhat_no]]
-value = 0
-says = "no"
+value = 2
+says = "yes"
 
 [[vocabulary.yes_somewhat_no]]
 value = 1
 says = "somewhat"
 
 [[vocabulary.yes_somewhat_no]]
-value = 2
-says = "yes"
+value = 0
+says = "no"
 
 [[vocabulary.yes_no]]
 name = "yes"

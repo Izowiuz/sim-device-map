@@ -137,6 +137,19 @@ class Row:
     button: int | None = None   # the button, where it is not described yet
 
 
+#: The width of each column of a control row, in the order they come.
+#: One tuple, so the heading and the rows cannot disagree about where a
+#: column starts -- which is the whole use of a heading.
+COLUMNS = ((1, ''), (28, 'control'), (16, 'has'), (9, 'reach'),
+           (0, 'outstanding'))
+
+
+def control_head():
+    """The column names, laid out on the same widths as a row."""
+    return ' '.join(f'{said:<{wide}}' if wide else said
+                    for wide, said in COLUMNS).rstrip()
+
+
 def control_rows(dev):
     """[Row] -- every control, and everything that is not one yet.
 
@@ -156,10 +169,12 @@ def control_rows(dev):
             out += [_loose_row(b) for b in sorted(g.all_buttons)]
             continue
         state = _state(dev, g)
+        said = (MARK[state], _called(g)[:COLUMNS[1][0]], _owns(dev, g),
+                _where(g), _left_said(dev, g))
         out.append(Row(TONE[state],
-                       f'{MARK[state]} {_called(g)[:28]:28} '
-                       f'{_owns(dev, g):16} {_where(g):9} '
-                       f'{_left_said(dev, g)}',
+                       ' '.join(f'{t:<{wide}}' if wide else t
+                                for (wide, _name), t in zip(COLUMNS, said)
+                                ).rstrip(),
                        group=g))
     return out
 
@@ -470,6 +485,42 @@ def row_of(rows, dev, button):
         if r.button == button or (g is not None and r.group is g):
             return n
     return None
+
+
+def row_of_axis(rows, dev, index):
+    """Which row a moved axis belongs to, or None.
+
+    Every axis has a control -- `own_axes` sees to that -- so this is the
+    row of that control, the same row a press on it would land on.
+    """
+    g = dev.axis_group(index)
+    return next((n for n, r in enumerate(rows) if g is not None
+                 and r.group is g), None)
+
+
+def what_moved(dev, index, called=''):
+    """[(tone, text)] naming one axis, for the corner of the list.
+
+    The corner answered presses and said nothing about axes, so moving a
+    lever -- the one thing on a throttle you cannot press to identify --
+    left you back where you started.
+
+    `called` is what the shape calls this one of its axes. Handed in
+    rather than looked up, because that word lives in the descriptor and
+    nothing here reads it: this module builds rows out of what it is
+    given, the way `reach_rounds` is given its postures.
+    """
+    g = dev.axis_group(index)
+    if g is None:
+        return [('unset', f'axis {index}'),
+                ('meta', NOT_A_CONTROL['uncaptured'][0])]
+    said = [(TONE[_state(dev, g)], f'axis {index}'),
+            ('plain', _called(g))]
+    if called:
+        said.append(('meta', called))
+    if g.tier is not None:
+        said.append(('meta', f'tier {g.tier}'))
+    return said
 
 
 def _loose_row(button):

@@ -1288,3 +1288,60 @@ class APressWithNowhereToGo(unittest.TestCase):
         self.assertFalse(got)
         self.assertEqual(before, open(path).read())
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+class PressingAControlShowsItAtOnce(unittest.TestCase):
+    """`browse` draws the list it was handed until a key comes back. The
+    poll changed the answer and handed back a NEW list, so the tick you
+    had just earned did not appear until you touched the keyboard."""
+
+    class Watches:
+        """A browse that runs the poll a few times and reports."""
+
+        def __init__(self, ticks=1):
+            self.ticks, self.seen = ticks, []
+            self.scr = fake.Screen(16, 80)
+
+        def browse(self, title, lines, side, keys=(), tail='', right='',
+                   index=0, takes=(), aside='', poll=None, count=None):
+            assert poll is not None, 'this screen is driven by the hardware'
+            for _ in range(self.ticks):
+                poll()
+                self.seen.append(([t for _tone, t in lines],
+                                  right() if callable(right) else right))
+            return None, 0
+
+    def setUp(self):
+        real = fake.devices()[0]
+        self.dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
+        self.dev.under(fake.rig(real))
+        self.one = next(g for g in self.dev.groups(bindable=True) if g.id)
+
+    def press(self, button):
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, struct.pack('<IhBB', 0, 1,
+                                       capture.JS_EVENT_BUTTON, button))
+        os.close(write_fd)
+        tui = self.Watches()
+        ask = next(a for a in capture.SHEET.of(q.ALL)
+                   if a.sets == "hold_ok")
+        try:
+            capture.ask_all(tui, read_fd, self.dev, ask)
+        finally:
+            os.close(read_fd)
+        return tui
+
+    def test_the_row_shows_the_answer_on_the_same_frame(self):
+        tui = self.press(self.one.buttons[0])
+        rows, _right = tui.seen[0]
+        said = next(t for t in rows if (self.one.label or '') in t)
+        self.assertIn(screens.SAID[True], said)
+
+    def test_and_so_does_the_count_in_the_frame(self):
+        tui = self.press(self.one.buttons[0])
+        _rows, right = tui.seen[0]
+        self.assertTrue(right.startswith('1 of'), right)
+
+    def test_a_button_no_control_owns_changes_nothing(self):
+        before = self.press(self.one.buttons[0]).seen[0][1]
+        self.assertTrue(before.startswith('1 of'))

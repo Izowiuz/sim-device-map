@@ -1,3 +1,5 @@
+# WARNING WARNING 100% VIBECODED WARNING WARNING
+
 # sim-device-map
 
 What each button and axis on a piece of sim hardware **physically is** — kept

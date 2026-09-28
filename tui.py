@@ -443,6 +443,11 @@ class Tui:
         `count(n)` is what the detail panel's edge says about row `n`. The
         default counts rows, which is right until the list has headings in
         it and the rows stop matching the things they list.
+
+        `right` may be a function, for a screen whose contents change
+        under it: the hardware in your hands answers a question, and a
+        count worked out before the loop started goes on saying the old
+        number until you press a key.
         """
         sel, top = index, 0
         while True:
@@ -487,7 +492,9 @@ class Tui:
         """Both panels, on whatever is already there."""
         h, w = self.scr.getmaxyx()
         (ly, lx, lh, lw), (ry, rx, rh, rw) = self.halves(h, w)
-        self._frame((ly, lx, lh, lw), title, right, keys, tail)
+        self._frame((ly, lx, lh, lw), title,
+                    right() if callable(right) else right,
+                    keys, tail)
         at, room = text_in(lx, lw)
         for n, (tone, text) in enumerate(lines[top:top + lh - 2]):
             lit = self.theme.sel if top + n == sel else self.theme[tone]

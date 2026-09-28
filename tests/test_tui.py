@@ -404,3 +404,24 @@ class WhatTheDetailPanelCounts(unittest.TestCase):
         said = self.browse(count=lambda n: '')
         self.assertIn('side', said)
         self.assertNotIn('1 of 2', said)
+
+
+class TheFrameCounterCanBeLive(unittest.TestCase):
+    """A screen whose contents change under it -- the hardware in your
+    hands answering a question -- had a count worked out before the loop
+    started, so it went on saying the old number until you pressed a key."""
+
+    def drawn(self, right):
+        scr = fake.Screen(16, 80, keys=[27])
+        t = tui.Tui(scr, tui.Theme(False))
+        t.browse('list', [('plain', 'one')],
+                 lambda n: ('side', [('plain', 'what')]), right=right)
+        return scr.text()
+
+    def test_a_string_is_still_a_string(self):
+        self.assertIn('3 of 9', self.drawn('3 of 9'))
+
+    def test_and_a_function_is_asked_each_time(self):
+        said = iter(['first', 'second', 'third'])
+        got = self.drawn(lambda: next(said))
+        self.assertIn('first', got)

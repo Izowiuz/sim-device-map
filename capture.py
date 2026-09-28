@@ -1050,6 +1050,8 @@ def ask_all(tui, fd, dev, ask):
     picks = SHEET.choices(ask)
     moved, at = False, 0
 
+    rows = screens.answer_rows(dev, ask, controls)
+
     def poll():
         nonlocal moved
         if not select.select([fd], [], [], 0)[0]:
@@ -1060,18 +1062,25 @@ def ask_all(tui, fd, dev, ask):
                 if g is not None and g in controls:
                     _step(dev, g, ask, picks)
                     moved = True
+                    # In place, because `browse` is drawing this very
+                    # list and will go on drawing it until a key comes
+                    # back: handing it a new one changes nothing you can
+                    # see, so the tick you just earned never appeared.
+                    rows[:] = screens.answer_rows(dev, ask, controls)
                     return controls.index(g)
         return None
 
+    def told():
+        said = sum(1 for g in controls if g.told(ask.sets) == 'measured')
+        return f'{said} of {len(controls)} answered'
+
     while True:
-        rows = screens.answer_rows(dev, ask, controls)
-        told = sum(1 for g in controls if g.told(ask.sets) == 'measured')
+        rows[:] = screens.answer_rows(dev, ask, controls)
         what, at = tui.browse(
             screens.caption(ask), rows,
             lambda n: screens.answer_side(dev, ask, controls, n),
             keys=('press a control', 'SPACE answers', '↵ done'),
-            right=f'{told} of {len(controls)} answered',
-            index=at, takes=(' ',), poll=poll)
+            right=told, index=at, takes=(' ',), poll=poll)
         if what in (None, 'enter'):
             return moved
         if what == ' ':

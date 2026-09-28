@@ -114,11 +114,24 @@ class TheShapeOfAControl(unittest.TestCase):
         got = capture.states_of('switch2', [4, 5])
         self.assertTrue(all(st.get('latching') for st in got))
 
-    def test_a_direction_is_a_name_that_points_somewhere(self):
+    def test_a_direction_is_the_word_and_the_only_copy_of_it(self):
+        # `up` used to go in as both `name` and `direction`, so a reader
+        # had to know the two could not disagree to know which to trust.
         got = capture.states_of('hat4', [4, 5], ['up', 'right'],
                                 directional=True)
         self.assertEqual(['up', 'right'], [st['direction'] for st in got])
-        self.assertEqual(['up', 'right'], [st['name'] for st in got])
+        self.assertTrue(all('name' not in st for st in got))
+
+    def test_and_a_control_still_says_what_its_positions_are_called(self):
+        one = devicemap.Group(kind='hat4', states=capture.states_of(
+            'hat4', [4, 5], ['up', 'right'], directional=True))
+        self.assertEqual(['up', 'right'], one.names)
+        self.assertEqual('up', one.direction(4))
+
+    def test_a_contact_is_named_by_its_role_and_not_twice(self):
+        got = capture.states_of('trigger', [2], contacts=[('transient', 9)])
+        self.assertEqual('transient', got[-1]['role'])
+        self.assertNotIn('name', got[-1])
 
     def test_a_stage_is_a_name_that_does_not(self):
         got = capture.states_of('trigger', [2, 3], ['first', 'second'])
@@ -148,15 +161,15 @@ class TheUnknownBucket(unittest.TestCase):
         data = fake.raw(groups=[fake.group('button', [0])], buttons=3)
         missing = capture.reconcile(data, 3)
         self.assertEqual([1, 2], missing)
-        bucket = next(g for g in data['group'] if g['kind'] == 'unknown')
+        bucket = next(g for g in data['group'] if g.get('status') == 'uncaptured')
         self.assertEqual([1, 2], capture.buttons_of(bucket))
 
     def test_the_bucket_goes_away_when_it_empties(self):
         data = fake.raw(groups=[fake.group('button', [0]),
-                                fake.group('unknown', [1])], buttons=1)
+                                fake.bucket([1])], buttons=1)
         capture.reconcile(data, 1)
         self.assertEqual([], [g for g in data['group']
-                              if g['kind'] == 'unknown'])
+                              if g.get('status') == 'uncaptured'])
 
     def test_a_click_is_not_swept_up(self):
         data = fake.raw(groups=[fake.group('hat4', [0, 1, 2, 3], push=4)],
@@ -172,7 +185,7 @@ class TheUnknownBucket(unittest.TestCase):
                         buttons=2)
         self.assertEqual([], capture.reconcile(data, 2))
         self.assertEqual([], [g for g in data['group']
-                              if g['kind'] == 'unknown'])
+                              if g.get('status') == 'uncaptured'])
 
     def test_nothing_ends_up_in_two_groups(self):
         # The invariant itself, asked of the parsed side, which is the side
@@ -203,11 +216,19 @@ class WhatCanBeBound(unittest.TestCase):
         self.assertEqual([2, 3], g.bindable_buttons)
 
     def test_a_bucket_offers_nothing(self):
-        for kind in ('unknown', 'unwired', 'switch-position'):
-            with self.subTest(kind=kind):
-                g = fake.control(kind, [0, 1])
+        # A status and not a kind. `unknown` sitting in `kind` meant the
+        # field could never be closed against the vocabulary, and
+        # `bindable` was a blacklist of words rather than one question.
+        for status in devicemap.STATUS:
+            with self.subTest(status=status):
+                g = devicemap.Group(**fake.group('', [0, 1], status=status))
                 self.assertEqual([], g.bindable_buttons)
                 self.assertFalse(g.bindable)
+
+    def test_and_a_shape_always_does(self):
+        for kind in ('button', 'hat4', 'trigger', 'selector'):
+            with self.subTest(kind=kind):
+                self.assertTrue(fake.control(kind, [0, 1]).bindable)
 
 
 class WhatAButtonIsCalled(unittest.TestCase):

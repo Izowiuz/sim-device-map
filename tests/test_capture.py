@@ -205,7 +205,7 @@ class WhatTheRoundsAmountTo(unittest.TestCase):
         dev = self.dev()
         one = self.some(dev, 1)[0]
         got = capture.reach_from(dev, [('HOME', 'thumb', one.buttons[:1])])
-        self.assertEqual([{'part': dev.kind, 'level': 'HOME',
+        self.assertEqual([{'level': 'HOME',
                            'finger': 'thumb'}], got[one.id])
 
     def test_reached_two_ways_is_recorded_two_ways(self):
@@ -243,41 +243,50 @@ class HowASpotIsWritten(unittest.TestCase):
     def test_a_spot_writes_every_part_of_itself(self):
         # The one the wizard actually hands it: a `Spot`, not a dict.
         import tomllib
-        spot = devicemap.Spot(part='stick', level='HOME', finger='thumb')
+        spot = devicemap.Spot(role='stick', level='HOME', finger='thumb')
         got = tomllib.loads('x = ' + capture._spot_said(spot))['x']
-        self.assertEqual({'part': 'stick', 'level': 'HOME',
+        self.assertEqual({'level': 'HOME',
                           'finger': 'thumb'}, got)
 
     def test_no_finger_recorded_writes_no_finger(self):
-        said = capture._spot_said({'part': 'panel', 'level': 'OFF',
+        said = capture._spot_said({'level': 'OFF',
                                    'finger': ''})
         self.assertNotIn('finger', said)
 
     def test_it_parses_as_what_it_claims_to_be(self):
         import tomllib
         got = tomllib.loads('x = ' + capture._spot_said(
-            {'part': 'stick', 'level': 'HOME', 'finger': 'thumb'}))
-        self.assertEqual({'part': 'stick', 'level': 'HOME',
+            {'level': 'HOME', 'finger': 'thumb'}))
+        self.assertEqual({'level': 'HOME',
                           'finger': 'thumb'}, got['x'])
 
 
 class WhereAHandIsAtEachLevel(unittest.TestCase):
+    """Which piece of the rig a hand is on is the device plus the level,
+    and it is worked out where it is read rather than written on every
+    spot -- where it could disagree with both."""
+
+    def spot(self, level):
+        return devicemap.Spot(role='throttle', level=level)
+
     def test_in_the_grip_it_is_on_the_device(self):
-        dev = fake.devices()[0]
         for level in devicemap.GRIPPED:
             with self.subTest(level=level):
-                self.assertEqual(dev.kind, capture._part_of(dev, level))
+                self.assertEqual('throttle', self.spot(level).part)
 
     def test_off_the_grip_it_is_on_the_base(self):
-        dev = fake.devices()[0]
-        self.assertEqual(f'{dev.kind}_base', capture._part_of(dev, 'BASE'))
+        self.assertEqual('throttle_base', self.spot('BASE').part)
 
-    def test_every_part_it_names_is_in_the_vocabulary(self):
-        for dev in fake.devices():
-            for level in devicemap.LEVELS[:3]:
-                with self.subTest(dev=dev.slug, level=level):
-                    self.assertIn(capture._part_of(dev, level),
-                                  devicemap.PARTS)
+    def test_it_follows_what_the_desk_calls_the_device(self):
+        # Not the capture's `kind`: a desk may put a stick on the left
+        # and call it something else, and reach is a fact about the desk.
+        dev = fake.devices()[0]
+        prof = devicemap.Profile({'name': 'x', 'device': [
+            {'slug': dev.slug, 'hand': 'left', 'role': 'collective',
+             'access': {g.id: [{'level': 'HOME', 'finger': 'thumb'}]
+                        for g in dev.groups(bindable=True) if g.id}}]}, '<x>')
+        one = next(g for g in dev.under(prof).groups(bindable=True) if g.access)
+        self.assertEqual('collective', one.access[0].part)
 
 
 class RecordingAFact(unittest.TestCase):
@@ -364,10 +373,7 @@ class SteppingAnAnswerOn(unittest.TestCase):
     answer about it. One gesture for both shapes of question."""
 
     def setUp(self):
-        import copy
-        real = fake.devices()[0]
-        self.dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
-        self.dev.under(fake.rig(real))
+        self.dev = fake.unanswered()
         self.g = next(x for x in self.dev.groups(bindable=True) if x.id)
         self.sheet = capture.SHEET
 
@@ -398,13 +404,15 @@ class SteppingAnAnswerOn(unittest.TestCase):
         self.assertEqual('measured', self.g.told('hold_ok'))
 
     def test_a_graded_answer_walks_its_own_choices(self):
-        picks = [c['name'] for c in self.sheet.choices(self.ask('blind_distinct'))]
+        picks = [q.stored(c)
+                 for c in self.sheet.choices(self.ask('blind_distinct'))]
         seen = self.walk('blind_distinct', len(picks) + 1)
         self.assertEqual(picks, seen[:len(picks)])
         self.assertIsNone(seen[-1])
 
     def test_it_only_ever_lands_on_a_choice_or_on_nothing(self):
-        picks = [c['name'] for c in self.sheet.choices(self.ask('accident_risk'))]
+        picks = [q.stored(c)
+                 for c in self.sheet.choices(self.ask('accident_risk'))]
         for got in self.walk('accident_risk', 9):
             self.assertIn(got, picks + [None])
 
@@ -431,6 +439,21 @@ class Browsed:
 
 
 class TheReachListIsNotCountedInRows(unittest.TestCase):
+
+    def test_it_offers_only_postures_you_can_walk_a_round_in(self):
+        # There is no round to walk with your hand off the device: OFF is
+        # where a control ends up when no round reached it, and offering
+        # it as a round asks you to press what you cannot touch.
+        dev = fake.devices()[0]
+        tui = Browsed()
+        capture.ask_reach(tui, None, dev, fake.rig(dev))
+        # The posture headings are capitalised on screen, so compare on
+        # the words rather than on how the row starts.
+        said = '\n'.join(t for _tone, t in tui.kw['lines']).lower()
+        for one in q.read().vocabulary['level']:
+            with self.subTest(level=one['name']):
+                self.assertEqual(one.get('walked', True),
+                                 one['says'].lower() in said)
 
     def test_the_panel_counts_nothing_rather_than_rows(self):
         # Three of the rows are postures, so a row count would disagree
@@ -467,7 +490,7 @@ class WhatNoRoundReached(unittest.TestCase):
 
     def test_it_stays_quiet_when_every_control_was_reached(self):
         dev = fake.devices()[0]
-        mine = [{'part': 'throttle', 'level': 'HOME', 'finger': 'thumb'}]
+        mine = [{'level': 'HOME', 'finger': 'thumb'}]
         said = {'access': {g.id: list(mine)
                            for g in dev.groups(bindable=True) if g.id}}
         tui = Said()
@@ -486,7 +509,7 @@ class WhatNoRoundReached(unittest.TestCase):
     def test_one_that_was_reached_is_left_alone(self):
         dev = fake.devices()[0]
         one = next(g for g in dev.groups(bindable=True) if g.id)
-        mine = [{'part': 'throttle', 'level': 'HOME', 'finger': 'thumb'}]
+        mine = [{'level': 'HOME', 'finger': 'thumb'}]
         said = {'access': {one.id: list(mine)}}
         capture._hands_off(Said(), dev, said)
         self.assertEqual(mine, said['access'][one.id])
@@ -674,12 +697,17 @@ class WritingDownACoupling(unittest.TestCase):
         tui = self.Picks()
         capture._record_couplings(tui, self.dev, self.moved())
         _title, _items, subtitle = tui.asked[0]
-        self.assertIn(self.axis(2).label, subtitle)
-        self.assertIn(self.axis(3).label, subtitle)
+        for n in (2, 3):
+            one = self.dev.axis_group(n)
+            assert one is not None
+            self.assertIn(one.label, subtitle)
 
     def test_a_pair_already_on_file_gains_rather_than_replaces(self):
         raw = next(a for a in self.dev._raw['axis'] if a['index'] == 2)
-        raw['moves_with'] = [7]
+        # Both, because the reader refuses one without the other: a list
+        # of what travels with this axis and no word for whether a catch
+        # undoes it is half a fact.
+        raw['moves_with'], raw['coupling'] = [7], 'fixed'
         self.dev = devicemap.Device(self.dev._raw, self.dev.path)
         capture._record_couplings(self.Picks(), self.dev, self.moved())
         self.assertEqual([3, 7], self.axis(2).moves_with)
@@ -924,7 +952,7 @@ class TheDeskIsHandedDownNotAskedForAgain(unittest.TestCase):
         one = next(g for g in dev.groups(bindable=True) if g.id)
         rig = devicemap.Profile({'name': 'x', 'device': [
             {'slug': dev.slug, 'hand': 'left',
-             'access': {one.id: [{'part': 'throttle', 'level': 'HOME',
+             'access': {one.id: [{'level': 'HOME',
                                   'finger': 'thumb'}]}}]}, '<x>')
         capture._reload(dev, rig)
         self.assertEqual('left', dev.hand)
@@ -1076,7 +1104,7 @@ class TheRoundCollectorDriven(unittest.TestCase):
     def test_the_screen_says_what_it_could_not_place(self):
         # Silence reads as a press the program did not see.
         fresh = fake.device(kind='stick',
-                            groups=[fake.group('unknown', [0, 1, 2])])
+                            groups=[fake.bucket([0, 1, 2])])
         read_fd, write_fd = os.pipe()
         scr = self.Feeds(write_fd, [(capture.JS_EVENT_BUTTON, 1, 1)])
         t = tui.Tui(scr, tui.Theme(False))
@@ -1115,7 +1143,7 @@ class TheRoundCollectorDriven(unittest.TestCase):
     def test_a_button_no_control_owns_yet_records_nothing(self):
         # A reach is a fact about a control, and there is not one here.
         fresh = fake.device(kind='stick',
-                            groups=[fake.group('unknown', [0, 1, 2])])
+                            groups=[fake.bucket([0, 1, 2])])
         self.assertEqual([], capture.reached_ids(fresh, [('button', 0)]))
 
     def test_but_it_is_said_on_the_screen_rather_than_dropped(self):
@@ -1123,7 +1151,7 @@ class TheRoundCollectorDriven(unittest.TestCase):
         # answer is to go and describe the thing -- which you cannot do
         # if you do not know it needs it.
         fresh = fake.device(kind='stick',
-                            groups=[fake.group('unknown', [0, 1, 2])])
+                            groups=[fake.bucket([0, 1, 2])])
         self.assertEqual([('button', 0)],
                          capture.unplaced(fresh, [('button', 0)]))
 
@@ -1145,7 +1173,7 @@ class TheRoundCollectorDriven(unittest.TestCase):
         self.assertEqual([], capture.unplaced(dev, got))
 
     def test_the_same_stray_press_is_listed_once(self):
-        fresh = fake.device(kind='stick', groups=[fake.group('unknown', [0])])
+        fresh = fake.device(kind='stick', groups=[fake.bucket([0])])
         self.assertEqual([('button', 0)],
                          capture.unplaced(fresh, [('button', 0)] * 3))
 
@@ -1222,7 +1250,7 @@ class APressWithNowhereToGo(unittest.TestCase):
     def setUp(self):
         self.dev = fake.device(kind='stick', groups=[
             fake.group('button', [0], label='Thumb', id='thumb'),
-            fake.group('unknown', [1, 2])])
+            fake.bucket([1, 2])])
 
     def placed(self):
         one = self.dev.groups(bindable=True)[0]
@@ -1300,7 +1328,7 @@ class PressingAControlShowsItAtOnce(unittest.TestCase):
         """A browse that runs the poll a few times and reports."""
 
         def __init__(self, ticks=1):
-            self.ticks, self.seen = ticks, []
+            self.ticks, self.seen, self.titles = ticks, [], []
             self.scr = fake.Screen(16, 80)
 
         def browse(self, title, lines, side, keys=(), tail='', right='',
@@ -1310,12 +1338,11 @@ class PressingAControlShowsItAtOnce(unittest.TestCase):
                 poll()
                 self.seen.append(([t for _tone, t in lines],
                                   right() if callable(right) else right))
+                self.titles.append(title)
             return None, 0
 
     def setUp(self):
-        real = fake.devices()[0]
-        self.dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
-        self.dev.under(fake.rig(real))
+        self.dev = fake.unanswered()
         self.one = next(g for g in self.dev.groups(bindable=True) if g.id)
 
     def press(self, button):
@@ -1341,11 +1368,19 @@ class PressingAControlShowsItAtOnce(unittest.TestCase):
     def test_and_so_does_the_count_in_the_frame(self):
         tui = self.press(self.one.buttons[0])
         _rows, right = tui.seen[0]
-        self.assertTrue(right.startswith('1 of'), right)
+        self.assertTrue(right.startswith('1/'), right)
+
+    def test_the_frame_asks_the_question(self):
+        # Not the label it is filed under. You answer this screen one
+        # control at a time, and the question is what you answer.
+        tui = self.press(self.one.buttons[0])
+        ask = next(a for a in capture.SHEET.of(q.ALL) if a.sets == 'hold_ok')
+        self.assertEqual([ask.says], list(dict.fromkeys(tui.titles)))
+        self.assertTrue(ask.says.endswith('?'), ask.says)
 
     def test_a_button_no_control_owns_changes_nothing(self):
         before = self.press(self.one.buttons[0]).seen[0][1]
-        self.assertTrue(before.startswith('1 of'))
+        self.assertTrue(before.startswith('1/'))
 
 
 class TakingAnAnswerBack(unittest.TestCase):
@@ -1356,23 +1391,23 @@ class TakingAnAnswerBack(unittest.TestCase):
     def setUp(self):
         self.said = {
             'slug': 'x', 'hand': 'left',
-            'rounds': [['HOME', 'thumb'], ['HOME', 'index']],
+            'rounds': [{'level': 'HOME', 'finger': 'thumb'}, {'level': 'HOME', 'finger': 'index'}],
             'access': {
-                'a': [{'part': 'stick', 'level': 'HOME', 'finger': 'thumb'}],
-                'b': [{'part': 'stick', 'level': 'HOME', 'finger': 'thumb'},
-                      {'part': 'stick', 'level': 'HOME', 'finger': 'index'}]}}
+                'a': [{'level': 'HOME', 'finger': 'thumb'}],
+                'b': [{'level': 'HOME', 'finger': 'thumb'},
+                      {'level': 'HOME', 'finger': 'index'}]}}
         lvl = {'name': 'HOME', 'says': 'in the normal grip'}
         self.one = screens.Round(lvl, 'thumb', ['a', 'b'], True)
 
     def test_the_spots_that_round_wrote_go(self):
         self.assertTrue(capture.forget_round(self.said, self.one))
         self.assertNotIn('a', self.said['access'])
-        self.assertEqual([{'part': 'stick', 'level': 'HOME',
+        self.assertEqual([{'level': 'HOME',
                            'finger': 'index'}], self.said['access']['b'])
 
     def test_and_so_does_its_place_in_the_walk(self):
         capture.forget_round(self.said, self.one)
-        self.assertEqual([['HOME', 'index']], self.said['rounds'])
+        self.assertEqual([{'level': 'HOME', 'finger': 'index'}], self.said['rounds'])
 
     def test_what_another_finger_found_is_left_alone(self):
         capture.forget_round(self.said, self.one)
@@ -1383,7 +1418,7 @@ class TakingAnAnswerBack(unittest.TestCase):
         self.assertFalse(capture.forget_round(self.said, self.one))
 
     def test_a_walked_round_that_found_nothing_can_still_be_taken_back(self):
-        said = {'rounds': [['BASE', 'pinky']], 'access': {}}
+        said = {'rounds': [{'level': 'BASE', 'finger': 'pinky'}], 'access': {}}
         lvl = {'name': 'BASE', 'says': 'with your hand off the grip'}
         one = screens.Round(lvl, 'pinky', [], True)
         self.assertTrue(capture.forget_round(said, one))
@@ -1440,8 +1475,8 @@ class ClearingAsksFirst(unittest.TestCase):
     def rig(self, dev):
         return devicemap.Profile({'name': 'x', 'device': [
             {'slug': dev.slug, 'hand': 'left',
-             'rounds': [['HOME', 'thumb']],
-             'access': {'a': [{'part': 'stick', 'level': 'HOME',
+             'rounds': [{'level': 'HOME', 'finger': 'thumb'}],
+             'access': {'a': [{'level': 'HOME',
                                'finger': 'thumb'}]}}]}, '<x>')
 
     def round_one(self):
@@ -1455,7 +1490,7 @@ class ClearingAsksFirst(unittest.TestCase):
         tui = self.Asks(yes=False)
         self.assertFalse(capture._clear_round(tui, dev, prof, said,
                                               self.round_one()))
-        self.assertEqual([['HOME', 'thumb']], said['rounds'])
+        self.assertEqual([{'level': 'HOME', 'finger': 'thumb'}], said['rounds'])
 
     def test_and_return_is_that_no(self):
         dev = fake.devices()[0]
@@ -1479,8 +1514,8 @@ class ClearingAsksFirst(unittest.TestCase):
         dev = fake.devices()[0]
         one = next(g for g in dev.groups(bindable=True) if g.id)
         prof = devicemap.Profile({'name': 'x', 'device': [
-            {'slug': dev.slug, 'rounds': [['HOME', 'thumb']],
-             'access': {one.id: [{'part': 'stick', 'level': 'HOME',
+            {'slug': dev.slug, 'rounds': [{'level': 'HOME', 'finger': 'thumb'}],
+             'access': {one.id: [{'level': 'HOME',
                                   'finger': 'thumb'}]}}]}, '<x>')
         lvl = {'name': 'HOME', 'says': 'in the normal grip'}
         tui = self.Asks()
@@ -1512,9 +1547,7 @@ class ClearingAsksFirst(unittest.TestCase):
         self.assertEqual('measured', one.told('hold_ok'))
 
     def test_a_fact_nobody_answered_is_not_worth_asking_about(self):
-        real = fake.devices()[0]
-        dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
-        dev.under(fake.rig(real))
+        dev = fake.unanswered()
         ask = next(a for a in capture.SHEET.of(q.ALL) if a.sets == 'hold_ok')
         tui = self.Asks(yes=True)
         self.assertFalse(capture._clear_fact(tui, dev, ask))
@@ -1649,7 +1682,7 @@ class SavingAsksFirst(unittest.TestCase):
             {'slug': self.dev.slug, 'hand': 'left'}]}, rigpath)
         capture.write_profile(rig)
         was = open(rigpath).read()
-        rig.devices[0]['rounds'] = [['HOME', 'thumb']]
+        rig.devices[0]['rounds'] = [{'level': 'HOME', 'finger': 'thumb'}]
         tui = self.Asks(yes=False)
         self.assertFalse(capture._save(tui, self.dev, rig))
         self.assertEqual(was, open(rigpath).read())
@@ -1662,7 +1695,7 @@ class SavingAsksFirst(unittest.TestCase):
         rig = devicemap.Profile({'name': 'Desk', 'device': [
             {'slug': self.dev.slug, 'hand': 'left'}]}, rigpath)
         capture.write_profile(rig)
-        rig.devices[0]['rounds'] = [['HOME', 'thumb']]
+        rig.devices[0]['rounds'] = [{'level': 'HOME', 'finger': 'thumb'}]
         self.change()
         was_dev, was_rig = open(self.path).read(), open(rigpath).read()
         self.assertTrue(capture._save(self.Asks(yes=True), self.dev, rig))
@@ -1699,7 +1732,7 @@ class EveryFingerDoneIsAChange(unittest.TestCase):
 
     def test_and_when_there_was_nothing_left_to_write(self):
         dev = fake.devices()[0]
-        mine = [{'part': 'throttle', 'level': 'HOME', 'finger': 'thumb'}]
+        mine = [{'level': 'HOME', 'finger': 'thumb'}]
         said = {'access': {g.id: list(mine)
                            for g in dev.groups(bindable=True) if g.id}}
         self.assertFalse(capture._hands_off(self.Says(), dev, said))
@@ -1709,7 +1742,8 @@ class EveryFingerDoneIsAChange(unittest.TestCase):
         # `ask_reach` has to report it or the save never hears about it.
         dev = fake.devices()[0]
         levels = q.read().vocabulary['level']
-        every = [[lvl['name'], f] for lvl in levels
+        every = [{'level': lvl['name']} | ({'finger': f} if f else {})
+                 for lvl in levels
                  for f in devicemap.FINGERS]
         rig = devicemap.Profile({'name': 'x', 'device': [
             {'slug': dev.slug, 'hand': 'left', 'rounds': every,
@@ -1738,10 +1772,10 @@ class FindingTheAxisYouPicked(unittest.TestCase):
     is, so the screen says whether the thing under your hand is the one
     you picked off the list."""
 
-    def moved(self, which, wanted=None, to=30000):
+    def moved(self, which, wanted=None, to=30000, frm=0):
         read_fd, write_fd = os.pipe()
         scr = TheRoundCollectorDriven.Feeds(
-            write_fd, [(capture.JS_EVENT_AXIS, which, 0),
+            write_fd, [(capture.JS_EVENT_AXIS, which, frm),
                        (capture.JS_EVENT_AXIS, which, to)])
         t = tui.Tui(scr, tui.Theme(False))
         try:
@@ -1752,8 +1786,19 @@ class FindingTheAxisYouPicked(unittest.TestCase):
         return got, scr
 
     def test_it_reports_whichever_moved_furthest(self):
-        (idx, _travel), _scr = self.moved(3)
-        self.assertEqual(3, idx)
+        got, _scr = self.moved(3)
+        assert got is not None
+        self.assertEqual(3, got.index)
+
+    def test_it_measures_the_span_it_was_swept_through(self):
+        # The sweep is asked for anyway, so the span comes free. An axis
+        # reporting 255 end to end cannot hold a trim however smooth it
+        # is. End to end, not how far from zero: a lever swept from one
+        # stop to the other never passes through it.
+        got, _scr = self.moved(3, frm=-20000, to=30000)
+        assert got is not None
+        self.assertEqual(50000, got.range)
+
 
     def test_the_one_you_picked_says_so(self):
         _got, scr = self.moved(3, wanted=3)
@@ -1778,7 +1823,6 @@ class ADialMadeHereLoadsBackIn(unittest.TestCase):
 
     def test_the_entry_it_writes_is_one_the_reader_takes(self):
         entry = {'kind': 'dial', 'label': 'Wheel', 'axes': [4],
-                 'source': 'measured',
                  'states': capture.states_of('dial', [],
                                              contacts=[('push', 9)])}
         got = devicemap.Group(**entry)
@@ -1787,8 +1831,7 @@ class ADialMadeHereLoadsBackIn(unittest.TestCase):
         self.assertEqual([], got.places)
 
     def test_and_one_with_no_click_too(self):
-        entry = {'kind': 'dial', 'label': 'Wheel', 'axes': [4],
-                 'source': 'measured', 'states': capture.states_of('dial', [])}
+        entry = {'kind': 'dial', 'label': 'Wheel', 'axes': [4], 'states': capture.states_of('dial', [])}
         got = devicemap.Group(**entry)
         self.assertIsNone(got.push)
         self.assertEqual([], got.all_buttons)
@@ -1817,3 +1860,263 @@ class ADialMadeHereLoadsBackIn(unittest.TestCase):
         again = devicemap.Device(dev._raw, dev.path)
         one = next(g for g in again.groups() if 4 in (g.axes or []))
         self.assertEqual('dial', one.kind)
+
+
+class SavingTwiceHasNothingToSayTheSecondTime(unittest.TestCase):
+    """The writer leaves an empty field out, so anything written WITH one
+    differs from its own file for ever -- and `s` then had the same list
+    to show every single time you pressed it."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.dev = fake.devices()[0]
+        self.path = os.path.join(self.dir, 'desk.toml')
+        self.rig = devicemap.Profile({'name': 'Desk', 'device': [
+            {'slug': self.dev.slug, 'hand': 'left'}]}, self.path)
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def walk(self, finger):
+        one = next(g for g in self.dev.groups(bindable=True) if g.id)
+        said = self.rig.devices[0]
+        said.setdefault('access', {})[one.id] = [
+            {'level': 'HOME'}
+            | ({'finger': finger} if finger else {})]
+        said.setdefault('rounds', []).append(
+            {'level': 'HOME'} | ({'finger': finger} if finger else {}))
+
+    def left_to_say(self):
+        with open(self.path, 'rb') as fh:
+            return screens.desk_rows(tomllib.load(fh), self.rig._as_dict(),
+                                     self.dev.slug)
+
+    def test_a_finger_round_settles(self):
+        self.walk('thumb')
+        capture.write_profile(self.rig)
+        self.assertEqual([], self.left_to_say())
+
+    def test_and_so_does_a_whole_hand_one(self):
+        self.walk(devicemap.HAND)
+        capture.write_profile(self.rig)
+        self.assertEqual([], self.left_to_say())
+
+    def test_the_round_writes_no_empty_finger(self):
+        got = capture.reach_from(self.dev, [('HOME', devicemap.HAND,
+                                             [b for g in
+                                              self.dev.groups(bindable=True)
+                                              for b in g.buttons][:1])])
+        for spots in got.values():
+            for spot in spots:
+                with self.subTest(spot=spot):
+                    self.assertNotEqual('', spot.get('finger', 'absent'))
+
+    def test_but_a_finger_one_still_says_which(self):
+        one = next(g for g in self.dev.groups(bindable=True) if g.buttons)
+        got = capture.reach_from(self.dev, [('HOME', 'thumb',
+                                             one.buttons[:1])])
+        self.assertEqual('thumb', got[one.id][0]['finger'])
+
+    def one_round(self, finger, buttons):
+        """Walk one round for real, against a profile in a temp file."""
+        read_fd, write_fd = os.pipe()
+        scr = TheRoundCollectorDriven.Feeds(
+            write_fd, [(capture.JS_EVENT_BUTTON, b, 1) for b in buttons])
+        t = tui.Tui(scr, tui.Theme(False))
+        lvl = {'name': 'HOME', 'says': 'in the normal grip'}
+        one = screens.Round(lvl, finger, [], False)
+        try:
+            return capture._one_round(t, read_fd, self.dev, self.rig,
+                                      self.rig.devices[0], one)
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+
+    def test_a_walked_hand_round_writes_no_empty_finger(self):
+        one = next(g for g in self.dev.groups(bindable=True) if g.buttons)
+        self.assertTrue(self.one_round(devicemap.HAND, one.buttons[:1]))
+        spot, = self.rig.devices[0]['access'][one.id]
+        self.assertNotIn('finger', spot)
+
+    def test_and_walking_it_again_replaces_what_it_said(self):
+        every = [g for g in self.dev.groups(bindable=True) if g.buttons]
+        self.one_round(devicemap.HAND, every[0].buttons[:1])
+        self.one_round(devicemap.HAND, every[1].buttons[:1])
+        access = self.rig.devices[0]['access']
+        self.assertEqual([], access.get(every[0].id, []))
+        self.assertEqual(1, len(access[every[1].id]))
+
+    def test_and_forgetting_it_takes_those_spots_back(self):
+        one = next(g for g in self.dev.groups(bindable=True) if g.buttons)
+        self.one_round(devicemap.HAND, one.buttons[:1])
+        lvl = {'name': 'HOME', 'says': 'in the normal grip'}
+        self.assertTrue(capture.forget_round(
+            self.rig.devices[0],
+            screens.Round(lvl, devicemap.HAND, [one.id], True)))
+        self.assertNotIn(one.id, self.rig.devices[0].get('access') or {})
+
+
+class WhatAMeasurementMayOverwrite(unittest.TestCase):
+    """ESC on the settle screen means `not now`, not `forget what you
+    knew`. Writing the reading out whole put None over a noise figure
+    somebody had already sat through."""
+
+    def test_what_came_back_measured_goes_in(self):
+        entry = {'index': 0}
+        capture._measured(entry, capture.Reading(0, stepped=False,
+                                                 range=65534, noise=2))
+        self.assertEqual({'index': 0, 'stepped': False,
+                          'range': 65534, 'noise': 2}, entry)
+
+    def test_what_was_skipped_leaves_what_was_there(self):
+        entry = {'index': 0, 'noise': 2}
+        capture._measured(entry, capture.Reading(0, stepped=False, range=65534))
+        self.assertEqual(2, entry['noise'])
+
+    def test_and_does_not_invent_one_that_was_never_there(self):
+        entry = {'index': 0}
+        capture._measured(entry, capture.Reading(0))
+        self.assertEqual({'index': 0}, entry)
+
+
+class ASilentPositionIsAskedAboutOnce(unittest.TestCase):
+    """Only something that stays where you put it can have a detent the
+    game never hears about, and once the file says where it is, opening
+    the control must not ask again."""
+
+    def run_for(self, group):
+        run = q.Run(capture.SHEET, given=capture._already(group))
+        return [a.id for a in run.wanted()]
+
+    def test_a_switch_is_asked(self):
+        got = self.run_for(fake.control('switch3', [7, 8], names=['on', 'off'],
+                                        label='Mode'))
+        self.assertIn('silent', got)
+
+    def test_a_sprung_control_is_not(self):
+        # A hat is either sending or at rest. There is nowhere to leave it.
+        got = self.run_for(fake.control('hat4', [1, 2, 3, 4],
+                                        dirs=['up', 'right', 'down', 'left'],
+                                        label='Hat'))
+        self.assertNotIn('silent', got)
+
+    def test_where_the_file_says_it_is_comes_back(self):
+        states = capture.states_of('switch3', [7, 8], names=('on', 'off'),
+                                   silent_at=1)
+        g = devicemap.Group(kind='switch3', label='Mode', states=states)
+        self.assertEqual(1, capture._silent_at(g))
+        self.assertEqual(1, capture._already(g)['silent'])
+
+    def test_and_a_switch_without_one_says_so_rather_than_nothing(self):
+        g = fake.control('switch3', [7, 8], names=['on', 'off'], label='Mode')
+        self.assertIsNone(capture._silent_at(g))
+        self.assertIn('silent', capture._already(g))
+
+
+class WhichSlotTheSilenceGoesIn(unittest.TestCase):
+    """`nowhere` is the first row and index 0 is the second. Reading the
+    row number straight through made `every position sends something` put
+    a silent one before the first."""
+
+    class Picks:
+        def __init__(self, row):
+            self.row, self.offered = row, []
+
+        def menu(self, title, rows, *a, **kw):
+            self.offered = list(rows)
+            return self.row
+
+    def chose(self, row, places=(7, 8), names=('on', 'off')):
+        run = q.Run(capture.SHEET, given={
+            'buttons': (list(places), set()), 'kind': 'switch3',
+            'order': list(places)})
+        tui = self.Picks(row)
+        return capture.pick_slot(tui, run, 't', [], []), tui
+
+    def test_the_first_row_is_no_silent_position(self):
+        self.assertIsNone(self.chose(0)[0])
+
+    def test_the_second_row_is_before_the_first_position(self):
+        self.assertEqual(0, self.chose(1)[0])
+
+    def test_the_last_row_is_after_the_last_position(self):
+        got, tui = self.chose(3)
+        self.assertEqual(2, got)
+        self.assertEqual(4, len(tui.offered))
+
+    def test_every_gap_is_offered_and_no_more(self):
+        _got, tui = self.chose(0)
+        self.assertEqual(4, len(tui.offered))
+
+
+class DescribingALoneAxisNamesItsControl(unittest.TestCase):
+    """What a thing IS and what it is called belong to the control. The
+    flow used to write both onto the `[[axis]]` entry as well, and the
+    two drifted -- an axis calling itself a `slider` inside a control
+    called `Left side dial`."""
+
+    class Answers:
+        """A tui that moves the axis, takes the first of everything and
+        types a name.
+
+        The events go in as the screen draws, not before: `capture_axis`
+        drains the fd on the way in, so anything written up front is
+        thrown away exactly as a stale press would be.
+        """
+
+        def __init__(self, write_fd, index, name='Side lever'):
+            self.name, self.fd, self.index = name, write_fd, index
+            self.scr = fake.Screen(16, 80)
+            self.moves = [0, 30000]
+            # Nothing while it moves; accept; then skip the settle, which
+            # wants three seconds of somebody not touching it.
+            self.keys = ['', '', 'enter', 'esc']
+
+        def menu(self, *a, **kw):
+            return 0
+
+        def ask(self, *a, **kw):
+            return self.name
+
+        def confirm(self, *a, **kw):
+            return False
+
+        def screen(self, *a, **kw):
+            if self.moves:
+                os.write(self.fd, struct.pack(
+                    '<IhBB', 0, self.moves.pop(0),
+                    capture.JS_EVENT_AXIS, self.index))
+
+        def key(self, *a, **kw):
+            return self.keys.pop(0) if self.keys else 'esc'
+
+    def run_on(self, index):
+        dev = fake.device(kind='throttle', axes=[fake.axis(index)])
+        read_fd, write_fd = os.pipe()
+        try:
+            self.assertTrue(capture.capture_axis(
+                self.Answers(write_fd, index), dev, read_fd))
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        return dev
+
+    def test_the_control_carries_the_name(self):
+        dev = self.run_on(0)
+        g = next(g for g in dev._raw['group'] if g.get('axes') == [0])
+        self.assertEqual('Side lever', g['label'])
+        self.assertTrue(g['kind'])
+
+    def test_and_the_axis_carries_none_of_it(self):
+        dev = self.run_on(0)
+        a = next(a for a in dev._raw['axis'] if a['index'] == 0)
+        self.assertNotIn('kind', a)
+        self.assertNotIn('label', a)
+
+    def test_and_what_it_wrote_loads_back(self):
+        dev = self.run_on(0)
+        again = devicemap.Device(dev._raw, dev.path)
+        one = again.axis(0)
+        assert one is not None
+        self.assertEqual('Side lever', again.axis_label(0))
+        self.assertEqual(again.axis_kind(0), one.kind)

@@ -51,6 +51,36 @@ def devices(rig=None):
     return devicemap.load_all(bare=rig is None, rig=rig)
 
 
+def bucket(buttons=(), **kw):
+    """The pile of buttons nobody has described yet."""
+    kw.setdefault('label', 'Not yet captured')
+    return group('', buttons, status='uncaptured', **kw)
+
+
+def unwired(buttons=(), **kw):
+    """Buttons the firmware reports with nothing behind them."""
+    return group('', buttons, status='unwired', **kw)
+
+
+def unanswered(on_a_desk=True):
+    """A device nobody has answered the ergonomic questions about.
+
+    Deliberately NOT one of the real captures. Those are somebody's desk
+    and they fill up: every test that assumed "the first control has no
+    answer yet" broke on the day the last `hold_ok` was ticked, which is
+    a test failing for the one reason that means nothing went wrong.
+    """
+    dev = device(kind='throttle', axes=[axis(0)], groups=[
+        group('button', [0], label='Pinky button', id='pinky-button'),
+        group('button', [1], label='Thumb button', id='thumb-button'),
+        group('hat4', [3, 4, 5, 6], push=2, label='Thumb hat',
+              id='thumb-hat', dirs=['up', 'right', 'down', 'left']),
+        group('lever', [], axes=[0], label='Left throttle lever',
+              id='left-throttle-lever'),
+    ])
+    return dev.under(rig(dev)) if on_a_desk else dev
+
+
 def group(kind, buttons=(), names=(), dirs=(), stages=(), push=None,
           rest_contact=None, travel_contact=None, transient=(), **kw):
     """One raw `[[group]]` table.
@@ -81,7 +111,6 @@ def group(kind, buttons=(), names=(), dirs=(), stages=(), push=None,
         states.append({'name': 'passing', 'button': b, 'role': 'transient'})
     g = {'kind': kind, 'states': states}
     g.update({k: v for k, v in kw.items() if v is not None})
-    g.setdefault('source', 'measured')
     return g
 
 
@@ -90,23 +119,26 @@ def control(kind, buttons=(), **kw):
     return devicemap.Group(**group(kind, buttons, **kw))
 
 
-def axis(index, kind='lever', **kw):
-    """One raw `[[axis]]` table."""
-    a = {'index': index, 'kind': kind}
+def axis(index, **kw):
+    """One raw `[[axis]]` table.
+
+    No `kind` and no `label`: what a thing IS and what it is called live
+    on the control that owns it. Said here as well, the two drifted.
+    """
+    a = {'index': index}
     a.update({k: v for k, v in kw.items() if v is not None})
-    a.setdefault('source', 'measured')
     return a
 
 
 def raw(kind='stick', groups=(), axes=(), slug=None, product=None,
-        hand='', usb='3344:0001', serial='FAKE01', evdev=None,
+        usb='3344:0001', serial='FAKE01', evdev=None,
         buttons=None, fingerprint=None):
     """The dict a capture file parses into."""
     slug = slug or f'fake-{kind}'
     every = [b for g in groups for b in _claimed(g)]
     return {
         'device': {'slug': slug, 'product': product or f'Fake {kind}',
-                   'vendor': 'Fake', 'kind': kind, 'hand': hand,
+                   'vendor': 'Fake', 'kind': kind,
                    'buttons': buttons if buttons is not None
                               else 1 + max(every or [-1]),
                    'axes': len(axes)},
@@ -239,9 +271,10 @@ def probed(dev=None, js='/dev/input/js9', usb=None, serial=None,
         'usb': (usb if usb is not None else ident.get('usb', '')).lower(),
         'serial': serial if serial is not None else ident.get('serial', ''),
         'buttons': buttons if buttons is not None
-                   else fp.get('buttons', dev.n_buttons if dev else 0),
-        'axes': axes if axes is not None
-                else fp.get('axes', dev.n_axes if dev else 0),
+                   else (dev.n_buttons if dev else 0),
+        'axes': axes if axes is not None else (dev.n_axes if dev else 0),
+        # Two independent readings of the same device, in two different
+        # orders. Not to be zipped: see `Device.shape_now`.
         'axmap': list(axmap if axmap is not None else fp.get('axmap', [])),
         'hid': list(hid if hid is not None else fp.get('hid', [])),
         'evdev': evdev if evdev is not None else ident.get('evdev', ''),

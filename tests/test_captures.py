@@ -132,7 +132,7 @@ class NamingControls(unittest.TestCase):
 
     def named(self, path):
         return [g for g in rewritten(path)['group']
-                if g['kind'] != 'unknown']
+                if not g.get('status')]
 
     def test_every_described_control_gets_one(self):
         for path in CAPTURES:
@@ -182,7 +182,7 @@ def _normal(data):
                        key=lambda a: a['index']),
         'group': sorted((_sorted_states(g)
                          for g in data.get('group', [])),
-                        key=lambda g: (g.get('label', ''), g['kind'])),
+                        key=lambda g: (g.get('label', ''), g.get('kind', ''))),
     }
 
 
@@ -204,3 +204,44 @@ def _sorted_lists(table):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class NoCaptureNamesAnAxisTwice(unittest.TestCase):
+    """The real files, because this is what drifted in them: an axis
+    calling itself a `slider` inside a control called `Left side dial`."""
+
+    def test_no_axis_entry_says_what_it_is_or_what_it_is_called(self):
+        for path in sorted(glob.glob(os.path.join(devicemap.CAPTURES,
+                                                  '*', '*.toml'))):
+            with open(path, 'rb') as fh:
+                raw = tomllib.load(fh)
+            for a in raw.get('axis', []):
+                with self.subTest(path=os.path.basename(path),
+                                  axis=a['index']):
+                    self.assertNotIn('kind', a)
+                    self.assertNotIn('label', a)
+
+    def test_and_the_writer_does_not_put_them_back(self):
+        for path in sorted(glob.glob(os.path.join(devicemap.CAPTURES,
+                                                  '*', '*.toml'))):
+            with open(path, 'rb') as fh:
+                dev = devicemap.Device(tomllib.load(fh), path)
+            box = tempfile.mkdtemp()
+            dst = os.path.join(box, os.path.basename(path))
+            shutil.copy(path, dst)
+            capture.write_device(devicemap.Device(dev._raw, dst))
+            with open(dst, 'rb') as fh:
+                again = tomllib.load(fh)
+            shutil.rmtree(box)
+            for a in again.get('axis', []):
+                with self.subTest(path=os.path.basename(path),
+                                  axis=a['index']):
+                    self.assertNotIn('kind', a)
+                    self.assertNotIn('label', a)
+
+    def test_and_every_axis_still_has_a_name_through_its_control(self):
+        for dev in devicemap.load_all(bare=True):
+            for a in dev.axes():
+                with self.subTest(dev=dev.slug, axis=a.index):
+                    self.assertTrue(dev.axis_label(a.index))
+                    self.assertTrue(dev.axis_kind(a.index))

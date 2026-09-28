@@ -21,8 +21,11 @@ def rig(*devices):
     return devicemap.Profile({'name': 'Test', 'device': said}, '<fake>')
 
 
-def spot(part='stick', level='HOME', finger='thumb'):
-    return {'part': part, 'level': level, 'finger': finger}
+def spot(level='HOME', finger='thumb'):
+    # No `part`: which piece of the rig a hand is on follows from the
+    # device and the level, so a spot cannot claim to be on the throttle
+    # while sitting in the stick's access list.
+    return {'level': level, 'finger': finger}
 
 
 def controls(**named):
@@ -54,8 +57,7 @@ class WorkingTwoAtOnce(unittest.TestCase):
         # Different fingers, but one wants the grip and the other wants the
         # hand off it. The finger is not the constraint; the hand is.
         self.assertFalse(self.pair([spot(level='HOME', finger='thumb')],
-                                   [spot(part='stick_base', level='BASE',
-                                         finger='index')]))
+                                   [spot(level='BASE', finger='index')]))
 
     def test_a_stretched_finger_is_still_the_same_grip(self):
         # EXTENDED is not a posture of its own: the hand has not moved, one
@@ -74,18 +76,27 @@ class WorkingTwoAtOnce(unittest.TestCase):
                                    [spot(finger='thumb')]))
 
     def test_one_hand_is_on_one_device(self):
-        # Same posture, different fingers, but one spot is on the stick and
-        # the other on the throttle. The finger was never the whole answer.
-        self.assertFalse(self.pair([spot(part='stick', finger='thumb')],
-                                   [spot(part='throttle', finger='index')]))
+        # Same posture, different fingers, but one control is on the stick
+        # and the other on the throttle, both under the left hand. The
+        # finger was never the whole answer.
+        #
+        # Two devices and not two `part` words on one: a spot used to name
+        # its own piece of rig, which let a stick's spot say `throttle`.
+        sg, sa = controls(one=[spot(finger='thumb')])
+        tg, ta = controls(two=[spot(finger='index')])
+        prof = rig(('a-stick', 'left', sa), ('a-throttle', 'left', ta))
+        stick = fake.device(groups=sg, slug='a-stick', kind='stick')
+        throttle = fake.device(groups=tg, slug='a-throttle', kind='throttle')
+        self.assertFalse(devicemap.compatible(
+            stick.under(prof).groups()[0], throttle.under(prof).groups()[0]))
 
     def test_no_finger_recorded_means_no_and_not_probably(self):
         # The nineteen controls the old wording called "needs letting go"
         # arrived with a level and no finger, so nothing can say whether two
         # of them are two fingers or one. A hard constraint answers no to
         # what it cannot establish; S7 puts the fingers in.
-        blank = spot(part='panel', level='OFF', finger='')
-        known = spot(part='panel', level='OFF', finger='index')
+        blank = spot(level='OFF', finger='')
+        known = spot(level='OFF', finger='index')
         self.assertFalse(self.pair([blank], [dict(blank)]))
         self.assertFalse(self.pair([blank], [known]))
         self.assertFalse(self.pair([known], [blank]))
@@ -107,8 +118,8 @@ class AcrossTwoDevices(unittest.TestCase):
     capture file and a capture file is not a desk."""
 
     def hotas(self, stick_hand='right', throttle_hand='left'):
-        sg, sa = controls(trigger=[spot(part='stick', finger='index')])
-        tg, ta = controls(wep=[spot(part='throttle', finger='index')])
+        sg, sa = controls(trigger=[spot(finger='index')])
+        tg, ta = controls(wep=[spot(finger='index')])
         prof = rig(('a-stick', stick_hand, sa), ('a-throttle', throttle_hand, ta))
         stick = fake.device(groups=sg, slug='a-stick').under(prof)
         throttle = fake.device(groups=tg, slug='a-throttle').under(prof)
@@ -218,3 +229,24 @@ class TheDirectionVocabulary(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class WhatAnAxisIsGoodFor(unittest.TestCase):
+    """`proportional` decides whether a trim or an aim may go on an axis.
+    It used to read `travel != 'stepped'`, so an axis nobody had ever
+    swept answered yes -- which is how War Thunder's pitch trim landed on
+    a lever that turned out to be clamped to another one."""
+
+    def test_a_swept_axis_sweeps(self):
+        self.assertTrue(devicemap.Axis(index=0, stepped=False).proportional)
+
+    def test_a_hat_on_an_axis_does_not(self):
+        self.assertFalse(devicemap.Axis(index=0, stepped=True).proportional)
+
+    def test_and_neither_does_one_nobody_swept(self):
+        self.assertIsNone(devicemap.Axis(index=0).stepped)
+        self.assertFalse(devicemap.Axis(index=0).proportional)
+
+    def test_a_still_axis_is_measured_not_missing(self):
+        # 0 is the best noise there is, and the one a truth test drops.
+        self.assertEqual(0, devicemap.Axis(index=0, noise=0).noise)

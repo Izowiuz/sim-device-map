@@ -52,17 +52,21 @@ What is on offer instead is what the control physically does:
 | `states` | every position it has, whether each one latches, and whether it sends anything |
 | `direction` | which way a position points, from the pilot's seat |
 | `cumulative` | a deeper trigger detent keeps the shallower one held |
-| `axes`, `rest`, `travel` | whether an axis centres, parks at zero, sweeps or steps |
+| `axes`, `rest`, `stepped` | whether an axis centres, parks at zero, sweeps or steps |
+| `range`, `noise` | how fine it is end to end, and how far it wanders untouched |
 | `moves_with`, `coupling` | that two axes travel together as the rig is set up now |
 | `access` (in the profile) | where your hand has to be, and which finger |
 | `hold_ok`, `rapid_ok`, `modifier_ok` | comfortable held down, clicked fast, used as a shift |
-| `blind_distinct`, `accident_risk` | how easily found without looking, how easily hit by mistake |
+| `blind_distinct`, `accident_risk` | can you find it without looking, can it be pressed by mistake |
 
 The last two rows are ergonomics, and they are the one place a file may say
-nothing. A control with no answer falls back to what its shape usually is
-(`Group.fact`), and `Group.told` says which of the two you got. **A guess is
-never written down**: a file that records its own guesses cannot say
-afterwards which ones they were.
+nothing: `Group.fact` is None until somebody answers, and `Group.told` says
+which. **A guess is never written down**: a file that records its own guesses
+cannot say afterwards which ones they were.
+
+`blind_distinct` and `accident_risk` are scales, so the file holds `0`, `1`
+or `2` — no, somewhat, yes. The word lives in `questions.toml` and can be
+reworded; the number is what orders them.
 | button held at rest | **nothing** — it would fire continuously |
 
 ## Schema
@@ -83,12 +87,38 @@ only name code uses and nothing has to be renamed when a second brand arrives.
 
 ```toml
 [device]                # slug, product, vendor, kind, buttons, axes
-                        # kind: stick | throttle | pedals | panel | wheel
-[[identity]]            # usb, serial, evdev name, first_seen, per-game ids
-[fingerprint]           # buttons, axes, axmap, hid usages
-[[axis]]                # index, evdev, hid, rest, travel, kind, label, source
-[[group]]               # kind, id, states, cumulative, axes, label, source
+                        # kind: one of devicemap.ROLES_ON_A_DESK
+[[identity]]            # usb, serial, evdev name, first_seen (a date),
+                        # per-game ids
+[fingerprint]           # axmap + hid: two independent readings,
+                        # NOT paired. Counts are in [device].
+[[axis]]                # index, evdev, hid, rest, role,
+                        # stepped, range, noise
+[[group]]               # kind, id, states, cumulative, axes, label
+                        # -- or `status` where the row is not a control
 ```
+
+An axis does not say what it is or what it is called — the control that owns
+it does, and `Axis.kind`/`.label` are filled in from there when the file
+loads. Said in both places they drifted: this file had an axis calling itself
+a `slider` inside a control called `Left side dial`, and `axes(kind='dial')`
+answered *one* where the controls said *two*. `role` is `x` or `y` where a
+control has more than one axis, which is all an axis knows about itself that
+its control does not.
+
+Every closed field is checked when the file is read, and a word outside its
+list raises rather than loading: `kind` against `devicemap.KINDS`, `status`
+against `STATUS`, `[device].kind` against `ROLES_ON_A_DESK`, an axis's `rest`
+and `coupling` against theirs, and a state's `direction` and `role` against
+theirs. A control has a `kind` or a `status`, never both, and an axis has
+`moves_with` and `coupling` together or neither. A desk is checked when it is
+laid over the captures: its `role`, `hand`, every `level` and `finger`, and
+that every control and device it names exists.
+
+The closed lists live in `devicemap` — the reader — and `questions.toml`
+holds only the words for them. It refuses to load a descriptor offering a
+shape the reader will not accept, so a capture you cannot save is caught
+before it is offered.
 
 A control's positions and the contacts it carries are one list. A hat that
 clicks has five states -- four directions and the click, marked
@@ -206,7 +236,7 @@ hand = "right"
 leaving_home_releases_flight = true   # in-flight actions stay at HOME
 
 [device.access]
-top-thumb-hat = [{ part = "stick", level = "HOME", finger = "thumb" }]
+top-thumb-hat = [{ level = "HOME", finger = "thumb" }]
 ```
 
 `access` is a **list**, because most controls can be reached more than one
@@ -268,16 +298,17 @@ pilot, and it was seeded as `up` because pulling makes the aircraft climb.
 Under the rule above that button is `down`. Both seeded hats are `inferred`
 and are corrected by capturing them.
 
-`source` is the honesty field, and every consumer should respect it:
+There is no honesty field. A capture reaches the file only once somebody has
+described it, so presence *is* the claim: `source = "measured"` sat on every
+entry saying nothing, and on things nobody had measured. What is still missing
+is missing — `Group.told` answers that per fact, and an unmeasured `stepped`
+or `noise` is absent rather than defaulted.
 
-- `measured` — read from HID, evdev or a probe. Trust it.
-- `inferred` — reconstructed from how the owner bound this device in another
-  game, or from reasoning. Usually right, occasionally not: the throttle's
-  js 3/4/6 were seeded as a thumb button plus a three-position switch and turned
-  out, on the first capture pass, to be directions of a hat. `capture.py`
-  offers to replace whatever a captured control overlaps, so a wrong guess never
-  becomes permanent.
-- `unknown` — not yet captured. `capture.py` works through these.
+Rows that are not controls carry a `status` instead of a `kind`:
+
+- `uncaptured` — the pile of buttons nobody has pressed yet. `capture.py`
+  works through these.
+- `unwired` — the firmware reports them and nothing is physically behind them.
 
 ## Matching a device
 

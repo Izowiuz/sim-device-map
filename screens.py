@@ -12,6 +12,7 @@ that has something to get wrong.
 from dataclasses import dataclass
 
 import devicemap
+import questions
 import tui as ui
 
 #: Marks against a control in the list, and the tone each one asks for.
@@ -151,7 +152,7 @@ def control_rows(dev):
     """
     out = []
     for g in dev.groups():
-        if g.kind == 'unknown':
+        if g.status == 'uncaptured':
             out += [_loose_row(b) for b in sorted(g.all_buttons)]
             continue
         state = _state(g)
@@ -163,8 +164,9 @@ def control_rows(dev):
 
 
 #: What a finger is called in a sentence. `middle` alone reads as the
-#: middle of something.
-FINGER_SAID = {'thumb': 'thumb', 'index': 'index finger',
+#: middle of something, and the whole hand is not a finger at all.
+FINGER_SAID = {devicemap.HAND: 'whole hand',
+               'thumb': 'thumb', 'index': 'index finger',
                'middle': 'middle finger', 'ring': 'ring finger',
                'pinky': 'pinky'}
 
@@ -185,25 +187,29 @@ class Round:
 def reach_rounds(dev, prof, levels):
     """[Round] -- every posture and finger, and what each has found.
 
-    Fifteen of them for a whole device, not fifteen per control: in one
-    round you press everything that one finger reaches from one posture,
-    which on a throttle is usually a handful of controls and often none.
+    One per posture and per thing that reaches, not one per control: in
+    a round you press everything that one finger -- or the whole hand --
+    gets at from one posture, which on a throttle is usually a handful of
+    controls and often none.
     """
     said = (prof.entry(dev.slug) or {}).get('access') or {}
-    walked = (prof.entry(dev.slug) or {}).get('rounds') or []
+    walked = devicemap.walked(prof.entry(dev.slug))
     out = []
     for lvl in levels:
         for finger in devicemap.FINGERS:
+            # `or ''` because the writer leaves an empty finger out: a
+            # spot the whole hand reached comes back with no key at all.
             found = [c for c, spots in said.items()
                      if any(sp.get('level') == lvl['name']
-                            and sp.get('finger') == finger for sp in spots)]
+                            and (sp.get('finger') or '') == finger
+                            for sp in spots)]
             # Walked, and nothing else. What `access` says about this
             # posture may have come from somewhere other than a round --
             # the old captures said reach in prose and it was read into
             # spots -- and a round counted done because of that claims
             # work nobody did.
             out.append(Round(lvl, finger, sorted(found),
-                             [lvl['name'], finger] in walked))
+                             (lvl['name'], finger) in walked))
     return out
 
 
@@ -221,7 +227,7 @@ def reach_rows(rounds):
         said = (ui.plural(len(r.found), 'control') if r.found
                 else 'reached nothing' if r.done else 'not done yet')
         out.append((TONE['measured'] if r.done else TONE['missing'],
-                    f'    {r.finger:<8} {said}'))
+                    f'    {finger_said(r.finger):<14} {said}'))
     return out
 
 
@@ -278,13 +284,22 @@ def round_prompt(one):
     thing you need right now -- off the screen.
     """
     who = f'{finger_said(one.finger)}, {one.level["says"]}'
-    return (f'Reach: {who}',
-            list(one.level.get('hint') or [])
-            # A round that reaches nothing is an answer, and without this
-            # it looks like a screen you can only leave by cancelling.
-            + ['If it reaches nothing, just press RETURN.'],
+    # The hand is not one of the fingers, so it does not get their
+    # sentence: you do not reach a stick with your hand, you hold it.
+    says = ('Move what you work with the whole hand, not a finger, then'
+            ' RETURN.' if one.finger == devicemap.HAND else
             f'Press or move everything the {finger_said(one.finger)} can'
             ' reach, then RETURN.')
+    # The posture's own hint is about where a finger goes from a hand
+    # that has not moved, and the hand round moves it -- so on that one
+    # it contradicts the instruction above it.
+    hint = [] if one.finger == devicemap.HAND else list(
+        one.level.get('hint') or [])
+    return (f'Reach: {who}',
+            # A round that reaches nothing is an answer, and without this
+            # it looks like a screen you can only leave by cancelling.
+            hint + ['If it reaches nothing, just press RETURN.'],
+            says)
 
 
 def next_round_at(rounds, at):
@@ -345,24 +360,35 @@ def fact_rows(dev, asks):
 SAID = {True: '\u2713', False: '\u00b7'}
 
 
-def answer_rows(dev, ask, controls):
+def answer_rows(dev, ask, controls, picks):
     """[(tone, text)] -- every control and its answer to one fact."""
     out = []
+    said = _words(picks)
+    wide = max([len(w) for w in said.values()] or [1])
     for g in controls:
         got = g.fact(ask.sets)
         told = g.told(ask.sets)
         mark = ('' if got is None else SAID[got] if isinstance(got, bool)
-                else str(got))
+                else said[got])
         # The answer and what it is about, and nothing else. How far away
         # the control is is true and beside the point: the question is
         # about the feel of the thing under your finger, and a column that
         # says nothing towards it is a column to read past on every row.
         out.append((TONE[told] if told == 'measured' else 'meta',
-                    f'{mark:<6} {g.label or g.kind}'))
+                    f'{mark:<{wide}} {g.label or g.kind}'))
     return out
 
 
-def answer_side(dev, ask, controls, at):
+def _words(picks):
+    """{what is stored: what it is called}, for a question with a scale.
+
+    A scale is a number in the file, so a screen has nothing to print
+    until it goes back to the vocabulary the number came from.
+    """
+    return {questions.stored(c): c['says'] for c in picks}
+
+
+def answer_side(dev, ask, controls, at, picks):
     """(title, [(tone, text)]) for the control the cursor is on.
 
     Two things and nothing else: what this control answers, and the
@@ -370,25 +396,24 @@ def answer_side(dev, ask, controls, at):
     far away it is are true and beside the point -- the question is about
     the feel of the thing under your finger.
 
-    Nothing here says to press it, either. The border already does, and a
-    hint repeated in both places costs two rows of the note, which is the
-    half that tells you how to answer.
+    The question itself is not here. It is the title of the panel this one
+    sits beside, and a question printed twice on one screen reads as two
+    questions until you have compared them.
     """
     g = controls[at]
-    said = [(TONE[g.told(ask.sets)], _answer_said(g.fact(ask.sets))),
-            ('plain', ''),
-            ('plain', ask.says)]
+    said = [(TONE[g.told(ask.sets)],
+             _answer_said(g.fact(ask.sets), _words(picks)))]
     said += ui.aside_of(note_lines(ask))
     return g.label or g.kind, said
 
 
-def _answer_said(got):
+def _answer_said(got, said):
     """An answer in words rather than as whatever it is stored as."""
     if got is None:
         return 'no answer yet'
     if isinstance(got, bool):
         return 'yes' if got else 'no'
-    return str(got)
+    return said[got]
 
 
 def fact_side(dev, asks, at):
@@ -423,7 +448,7 @@ def what_is(dev, button):
     g = dev.group_of(button)
     if g is None:
         return [('unset', f'js {button}'),
-                ('meta', NOT_A_CONTROL['unknown'][0])]
+                ('meta', NOT_A_CONTROL['uncaptured'][0])]
     if not g.bindable:
         return [('unset', f'js {button}'),
                 ('meta', NOT_A_CONTROL.get(g.kind, (g.kind,))[0])]
@@ -461,18 +486,16 @@ def _nothing_yet(said, **what):
     """
     return Row(TONE['missing'],
                f'{MARK["missing"]} {said:28} '
-               f'{"":16} {"":9} {NOT_A_CONTROL["unknown"][0]}',
+               f'{"":16} {"":9} {NOT_A_CONTROL["uncaptured"][0]}',
                **what)
 
 
 #: The rows that are not controls at all, and what each one is. Why it is
 #: that way belongs in the help, not on every line of the list.
 NOT_A_CONTROL = {
-    'unknown': ('not described', 'nobody has pressed them yet'),
+    'uncaptured': ('not described', 'nobody has pressed them yet'),
     'unwired': ('nothing behind them',
                 'the firmware reports them; no button is wired'),
-    'switch-position': ('held at rest',
-                        'closed all the time, so never offered'),
 }
 
 
@@ -484,7 +507,7 @@ def _called(group):
     called `button` -- and the row then looks finished.
     """
     if not group.bindable:
-        return NOT_A_CONTROL.get(group.kind, (group.kind,))[0]
+        return NOT_A_CONTROL[group.status][0]
     if group.label:
         return group.label
     owned = group.all_buttons
@@ -588,8 +611,8 @@ def _thing_said(dev, kind, num):
     if kind != 'axis':
         return dev.button_label(num)
     a, g = dev.axis(num), dev.axis_group(num)
-    said = a.label if a and a.label else f'axis {num}'
-    return f'{said} [{g.label}]' if g and g.label else said
+    said = (g.label or g.kind) if g else f'axis {num}'
+    return f'{said} ({a.role})' if a and a.role else said
 
 
 def together_rows(dev, moved):
@@ -675,8 +698,8 @@ def desk_rows(before, after, slug):
     now = next((d for d in after.get('device') or []
                 if d.get('slug') == slug), {})
     out = []
-    walked = {tuple(r) for r in now.get('rounds') or []}
-    had = {tuple(r) for r in was.get('rounds') or []}
+    walked = devicemap.walked(now)
+    had = devicemap.walked(was)
     for lvl, finger in sorted(walked - had):
         out.append(('measured', f'  {"walked":<7} {finger}, {lvl}'))
     for lvl, finger in sorted(had - walked):
@@ -709,7 +732,7 @@ def found_rows(found):
     out = []
     for m in found:
         dev = m.device
-        loose, _axes = dev.unknown()
+        loose = dev.unknown()
         done, total = described(dev)
         if loose:
             said, tone = (f'{ui.plural(len(loose), "button")} not in a'
@@ -731,7 +754,7 @@ def found_hints(m):
     """[str] -- what to say about the device the cursor is on."""
     dev = m.device
     said = [f'{dev.kind}, {dev.hand} hand' if dev.hand else dev.kind]
-    loose, _axes = dev.unknown()
+    loose = dev.unknown()
     blank = [g for g in dev.groups(bindable=True) if not g.access]
     left = sum(_unanswered(g) for g in dev.groups(bindable=True))
     if loose:

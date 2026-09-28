@@ -1,0 +1,125 @@
+# The desk: which captured devices are on it, and how they sit.
+#
+# A capture says what a control IS. This says where it ended up, which is a
+# fact about the desk rather than about the hardware -- the same throttle on
+# a chair rail has a different reach and can be under a different hand. That
+# is why `reach` could not stay in the capture file, and why `hand` sat there
+# doing nothing until there was somewhere better to put it.
+#
+# `access` is a list because most controls can be reached more than one way,
+# and the nearest way is the one that decides how far a control is. The
+# wizard writes it, finger by finger; until it has, a device has none and
+# every control on it is of unknown reach.
+
+name = "IzoDesk"
+
+[[device]]
+slug = "virpil-vmax-prime-throttle"
+role = "throttle"
+hand = "left"
+rounds = [
+    { level = "HOME", finger = "thumb" },
+    { level = "HOME", finger = "index" },
+    { level = "HOME", finger = "middle" },
+    { level = "HOME", finger = "pinky" },
+    { level = "HOME", finger = "ring" },
+    { level = "EXTENDED", finger = "thumb" },
+    { level = "HOME" },
+    { level = "EXTENDED" },
+    { level = "EXTENDED", finger = "index" },
+    { level = "EXTENDED", finger = "middle" },
+    { level = "EXTENDED", finger = "ring" },
+    { level = "EXTENDED", finger = "pinky" },
+    { level = "BASE" },
+    { level = "BASE", finger = "thumb" },
+    { level = "BASE", finger = "index" },
+    { level = "BASE", finger = "middle" },
+    { level = "BASE", finger = "ring" },
+    { level = "BASE", finger = "pinky" },
+]
+
+[device.access]
+apu-button           = [{ level = "BASE", finger = "index" }]
+big-red-button       = [{ level = "EXTENDED", finger = "thumb" }]
+bottom-thumb-button  = [{ level = "HOME", finger = "thumb" }]
+e1-encoder           = [{ level = "BASE", finger = "index" }]
+e2-encoder           = [{ level = "BASE", finger = "index" }]
+keyboard-b1-button   = [{ level = "BASE", finger = "index" }]
+keyboard-b2-button   = [{ level = "BASE", finger = "index" }]
+keyboard-b3-button   = [{ level = "BASE", finger = "index" }]
+keyboard-b4-button   = [{ level = "BASE", finger = "index" }]
+keyboard-b5-button   = [{ level = "BASE", finger = "index" }]
+keyboard-b6-button   = [{ level = "BASE", finger = "index" }]
+left-side-dial       = [{ level = "BASE", finger = "index" }]
+left-throttle-lever  = [
+    { level = "HOME" },
+    { level = "BASE", finger = "index" },
+]
+middle-finger-button = [{ level = "HOME", finger = "middle" }]
+middle-finger-hat    = [{ level = "HOME", finger = "index" }]
+mode-selector        = [{ level = "BASE", finger = "index" }]
+pinky-button         = [{ level = "HOME", finger = "pinky" }]
+right-side-dial      = [{ level = "HOME", finger = "thumb" }]
+right-throttle-lever = [
+    { level = "HOME" },
+    { level = "BASE", finger = "index" },
+]
+side-lever           = [{ level = "EXTENDED" }]
+t1-rocker            = [{ level = "EXTENDED", finger = "thumb" }]
+t2-rocker            = [{ level = "EXTENDED", finger = "thumb" }]
+t3-rocker            = [{ level = "BASE", finger = "index" }]
+t4-rocker            = [{ level = "BASE", finger = "index" }]
+t5-rocker            = [{ level = "BASE", finger = "index" }]
+thumb-button         = [{ level = "HOME", finger = "thumb" }]
+thumb-hat            = [{ level = "HOME", finger = "thumb" }]
+thumb-mini-stick     = [{ level = "HOME", finger = "thumb" }]
+thumb-two-way-hat    = [{ level = "HOME", finger = "thumb" }]
+
+[[device]]
+slug = "virpil-vpc-stick-warbrd-d"
+role = "stick"
+hand = "right"
+leaving_home_releases_flight = true
+rounds = [
+    { level = "HOME", finger = "thumb" },
+    { level = "HOME", finger = "index" },
+    { level = "HOME", finger = "middle" },
+    { level = "HOME", finger = "ring" },
+    { level = "HOME", finger = "pinky" },
+    { level = "EXTENDED", finger = "ring" },
+    { level = "EXTENDED", finger = "thumb" },
+    { level = "EXTENDED", finger = "index" },
+    { level = "EXTENDED", finger = "middle" },
+    { level = "EXTENDED", finger = "pinky" },
+    { level = "BASE", finger = "thumb" },
+    { level = "BASE", finger = "index" },
+    { level = "BASE", finger = "middle" },
+    { level = "BASE", finger = "ring" },
+    { level = "BASE", finger = "pinky" },
+    { level = "HOME" },
+    { level = "EXTENDED" },
+    { level = "BASE" },
+]
+
+[device.access]
+analogue-brake-lever-on-the-grip = [
+    { level = "HOME", finger = "middle" },
+    { level = "HOME", finger = "ring" },
+    { level = "HOME", finger = "pinky" },
+]
+bottom-thumb-hat                 = [{ level = "HOME", finger = "thumb" }]
+grip-pinky-button                = [{ level = "EXTENDED", finger = "ring" }]
+grip-thumb-hat                   = [{ level = "HOME", finger = "thumb" }]
+main-stick-fore-aft              = [{ level = "HOME" }]
+main-stick-left-right            = [{ level = "HOME" }]
+main-trigger                     = [{ level = "HOME", finger = "index" }]
+mini-stick                       = [
+    { level = "HOME", finger = "index" },
+    { level = "HOME", finger = "thumb" },
+]
+stick-encoder-and-click          = [{ level = "HOME", finger = "thumb" }]
+stick-twist                      = [{ level = "HOME" }]
+thumb-bottom-button              = [{ level = "HOME", finger = "thumb" }]
+thumb-top-button                 = [{ level = "HOME", finger = "thumb" }]
+top-thumb-hat                    = [{ level = "HOME", finger = "thumb" }]
+trigger-initial-lever            = [{ level = "HOME", finger = "index" }]

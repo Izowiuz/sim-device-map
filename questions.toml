@@ -110,6 +110,20 @@ note = """Directions are physical, from your seat: UP is away from you,
 toward the nose."""
 
 [[ask]]
+id    = "silent"
+of    = "control"
+how   = "slot"
+only  = "may_sit_silent"
+says  = "Is there a position that sends nothing?"
+sets  = "silent_at"
+skip  = true
+note  = """A switch can have a detent the game never hears about -- the
+centre of an ON-OFF-(ON), or a park position wired to nothing.
+
+Nothing can measure this: a position that sends nothing looks exactly
+like a position that is not there."""
+
+[[ask]]
 id   = "name"
 of   = "control"
 how  = "name"
@@ -141,48 +155,48 @@ One finger at a time: press everything it reaches from that grip."""
 id     = "hold_ok"
 called = "comfortable to hold"
 of     = "all"
-how  = "tick"
-says = "Which ones can you hold down comfortably?"
-sets = "hold_ok"
+how    = "tick"
+says   = "Can you hold it down comfortably?"
+sets   = "hold_ok"
 
 [[ask]]
 id     = "rapid_ok"
 called = "quick to click"
 of     = "all"
-how  = "tick"
-says = "Which ones can you click repeatedly?"
-sets = "rapid_ok"
+how    = "tick"
+says   = "Can you click it repeatedly?"
+sets   = "rapid_ok"
 
 [[ask]]
 id     = "modifier_ok"
 called = "usable as a shift"
 of     = "all"
-how  = "tick"
-says = "Which ones could you hold down while pressing others?"
-sets = "modifier_ok"
-note = """A shift layer is a button you hold to give every other button a
+how    = "tick"
+says   = "Can you use it as a shift?"
+sets   = "modifier_ok"
+note   = """A shift layer is a button you hold to give every other button a
 second meaning."""
 
 [[ask]]
 id     = "blind_distinct"
 called = "found without looking"
 of     = "all"
-how  = "pick"
-says = "How easily can you find each one by feel?"
-sets = "blind_distinct"
-uses = "distinct"
-note = """Put your hand on the device and try it: does your finger land on
+how    = "pick"
+says   = "Can you find it without looking?"
+sets   = "blind_distinct"
+uses   = "yes_somewhat_no"
+note   = """Put your hand on the device and try it: does your finger land on
 this one, or do you have to count buttons to find it?"""
 
 [[ask]]
 id     = "accident_risk"
 called = "hit by mistake"
 of     = "all"
-how  = "pick"
-says = "How easily could each one be pressed by mistake?"
-sets = "accident_risk"
-uses = "risk"
-note = """Could you catch it with a knuckle on the way to something else,
+how    = "pick"
+says   = "Can it be pressed by mistake?"
+sets   = "accident_risk"
+uses   = "yes_somewhat_no"
+note   = """Could you catch it with a knuckle on the way to something else,
 or press it instead of its neighbour in a hurry?"""
 
 
@@ -267,6 +281,60 @@ says = "mini-stick"
 hint = ["Self-centring: two axes and often a press.",
         "Recorded as one control, so the click stays with its axes."]
 
+# What an axis is. The names are closed by `devicemap.AXIS_KINDS`, which is
+# what the reader checks a file against; the words live here because this is
+# where the screen gets them.
+
+[[vocabulary.axis_kind]]
+name = "stick-x"
+says = "main stick, left/right"
+hint = ["The flying axis."]
+
+[[vocabulary.axis_kind]]
+name = "stick-y"
+says = "main stick, fore/aft"
+hint = ["The flying axis. Wants inverting."]
+
+[[vocabulary.axis_kind]]
+name = "twist"
+says = "stick twist"
+hint = ["Self-centring. Usually rudder."]
+
+[[vocabulary.axis_kind]]
+name = "mini-stick-x"
+says = "mini-stick, horizontal"
+hint = ["Self-centring thumb stick.", "Wants a view, cue or aim pair."]
+
+[[vocabulary.axis_kind]]
+name = "mini-stick-y"
+says = "mini-stick, vertical"
+hint = ["Self-centring thumb stick.", "Wants a view, cue or aim pair."]
+
+[[vocabulary.axis_kind]]
+name = "lever"
+says = "lever"
+hint = ["Stays where you leave it. Throttle, collective."]
+
+[[vocabulary.axis_kind]]
+name = "slider"
+says = "slider"
+hint = ["Resting at minimum makes zero mean off."]
+
+[[vocabulary.axis_kind]]
+name = "dial"
+says = "rotary dial"
+hint = ["Turns. The nicest home for a trim axis."]
+
+[[vocabulary.axis_kind]]
+name = "pedal"
+says = "pedal"
+hint = ["Rudder, or a toe brake."]
+
+[[vocabulary.axis_kind]]
+name = "wheel"
+says = "wheel"
+hint = ["A steering wheel."]
+
 [[vocabulary.axis]]
 name = "up_down"
 says = "up and down"
@@ -300,29 +368,34 @@ name = "BASE"
 says = "with your hand off the grip"
 hint = ["You let go of the grip, but your hand stays on the device."]
 
-[[vocabulary.distinct]]
-name = "high"
-says = "found at once, by shape"
+# Not a posture you walk a round in -- it is where a control ends up when no
+# round reached it, written by the tool once every finger is done. It is here
+# because the order of this table IS the tier, and `devicemap.LEVELS` has to
+# match it exactly; leaving it out put the fourth level in one table and its
+# words in neither.
+[[vocabulary.level]]
+name = "OFF"
+says = "with your hand off the device"
+walked = false
+hint = ["Nothing on the device reaches it: you take your hand away."]
 
-[[vocabulary.distinct]]
-name = "low"
-says = "found, but you have to feel for it"
+# A scale, so it is stored as its number and never as its word. `value` is
+# what goes in the file and what anything ordering these compares; `says` is
+# only what the screen prints. One table, because "can you find it" and "can
+# it be pressed by mistake" take the same three answers, and two copies of
+# three words is two copies that drift.
 
-[[vocabulary.distinct]]
-name = "none"
-says = "one of a row of identical things"
+[[vocabulary.yes_somewhat_no]]
+value = 0
+says = "no"
 
-[[vocabulary.risk]]
-name = "low"
-says = "nothing near it, nothing to catch"
+[[vocabulary.yes_somewhat_no]]
+value = 1
+says = "somewhat"
 
-[[vocabulary.risk]]
-name = "med"
-says = "reachable by accident while doing something else"
-
-[[vocabulary.risk]]
-name = "high"
-says = "next to something you press in a hurry"
+[[vocabulary.yes_somewhat_no]]
+value = 2
+says = "yes"
 
 [[vocabulary.yes_no]]
 name = "yes"

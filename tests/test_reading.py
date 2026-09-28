@@ -10,6 +10,9 @@ joystick -- which is the point, because the gestures that break them are the
 awkward ones nobody performs on purpose.
 """
 
+import glob
+import os
+import tomllib
 import unittest
 from unittest import mock
 
@@ -23,21 +26,23 @@ class WhetherAnAxisSweeps(unittest.TestCase):
     axis. Binding an aim or a view to one gives you three, not a sweep."""
 
     def test_too_little_to_say(self):
-        self.assertEqual('', capture.classify_travel([0, 32767]))
+        # None and not False. An axis nobody swept far enough is not an
+        # axis that sweeps, and the two used to read the same -- which is
+        # how an unmeasured one ended up carrying a trim.
+        self.assertIsNone(capture.classify_travel([0, 32767]))
 
     def test_a_hat_pretending(self):
-        self.assertEqual('stepped',
-                         capture.classify_travel([-32767, 0, 32767, 0, -32767]))
+        self.assertIs(True,
+                      capture.classify_travel([-32767, 0, 32767, 0, -32767]))
 
     def test_a_real_sweep(self):
         values = list(range(-32767, 32767, 2000))
-        self.assertEqual('analog', capture.classify_travel(values))
+        self.assertIs(False, capture.classify_travel(values))
 
     def test_a_few_values_that_pass_through_the_middle(self):
         # Few distinct values, but one of them sits in the band a hat never
         # reports -- so it travelled rather than jumped.
-        self.assertEqual('analog',
-                         capture.classify_travel([-32767, 12000, 32767]))
+        self.assertIs(False, capture.classify_travel([-32767, 12000, 32767]))
 
 
 class ARotarySelector(unittest.TestCase):
@@ -112,8 +117,11 @@ class WhichDeviceThisIs(unittest.TestCase):
     update renames the device and must not lose it."""
 
     def dev(self, **kw):
-        return fake.device(fingerprint={'buttons': 12, 'axes': 5,
-                                        'axmap': [0, 1, 2, 3, 4],
+        # The counts live in `[device]` and only there. They used to sit in
+        # the fingerprint as well, and nothing ever checked the two agreed.
+        return fake.device(buttons=12,
+                           axes=[fake.axis(n) for n in range(5)],
+                           fingerprint={'axmap': [0, 1, 2, 3, 4],
                                         'hid': ['X', 'Y', 'Z', 'Rx', 'Ry']},
                            **kw)
 
@@ -161,8 +169,9 @@ class WhatIsPluggedIn(unittest.TestCase):
             return devicemap.find_connected()
 
     def fingerprinted(self, **kw):
-        return fake.device(fingerprint={'buttons': 12, 'axes': 5,
-                                        'axmap': [0, 1, 2, 3, 4],
+        return fake.device(buttons=12,
+                           axes=[fake.axis(n) for n in range(5)],
+                           fingerprint={'axmap': [0, 1, 2, 3, 4],
                                         'hid': ['X', 'Y']}, **kw)
 
     def test_the_stick_it_was_captured_on(self):
@@ -221,16 +230,14 @@ class AnAxisIsAControlToo(unittest.TestCase):
                            axes=[dict(a) for a in axes])
 
     def test_an_axis_nothing_owned_gets_a_control(self):
-        got = self.dev({'index': 4, 'kind': 'lever', 'label': 'Side lever',
-                        'source': 'measured'})
+        got = self.dev({'index': 4})
         one = got.axis_group(4)
         assert one is not None
-        self.assertEqual('Side lever', one.label)
+        self.assertIn('axis 4', one.label)
         self.assertEqual([4], one.axes)
 
     def test_and_it_can_carry_what_every_control_carries(self):
-        got = self.dev({'index': 4, 'kind': 'lever', 'label': 'Side lever',
-                        'source': 'measured'})
+        got = self.dev({'index': 4})
         one = got.axis_group(4)
         assert one is not None
         self.assertTrue(one.id)
@@ -239,26 +246,137 @@ class AnAxisIsAControlToo(unittest.TestCase):
         self.assertIsNone(one.fact('blind_distinct'))
 
     def test_one_a_control_already_owned_is_left_alone(self):
-        got = self.dev({'index': 5, 'kind': 'dial', 'label': 'Wheel',
-                        'source': 'measured'},
+        got = self.dev({'index': 5},
                        groups=[fake.group('dial', [], label='Wheel',
                                           id='wheel', axes=[5])])
         self.assertEqual(1, len([g for g in got.groups() if 5 in g.axes]))
 
-    def test_an_undescribed_one_does_not_land_in_the_bucket(self):
-        # `unknown` is the pile of buttons nobody has pressed. A control
-        # in it is one the list expands into its buttons, of which an
-        # axis has none -- so it vanished off the screen entirely.
-        got = self.dev({'index': 0, 'kind': 'unknown', 'source': 'unknown'})
+    def test_what_a_thing_is_has_one_answer(self):
+        # Asked of the axis table and of the control table, `dial` used
+        # to come back different -- an axis calling itself a `slider`
+        # inside a control called a dial, and whichever a caller happened
+        # to ask decided whether a trim could go there.
+        got = self.dev({'index': 5},
+                       groups=[fake.group('dial', [], label='Wheel',
+                                          id='wheel', axes=[5])])
+        self.assertEqual([5], [a.index for a in got.axes(kind='dial')])
+        self.assertEqual([[5]], [g.axes for g in got.groups('dial')])
+
+    def test_and_which_axis_of_its_control_it_is(self):
+        got = self.dev({'index': 0, 'role': 'x'}, {'index': 1, 'role': 'y'},
+                       groups=[fake.group('ministick', [], label='Mini',
+                                          id='mini', axes=[0, 1])])
+        self.assertEqual(['x', 'y'], [a.role for a in got.axes()])
+        self.assertEqual([0, 1], [a.index for a in got.axes(kind='ministick')])
+
+    def test_an_undescribed_one_still_gets_a_control(self):
+        # The pile of buttons nobody has pressed is a `status` now, so an
+        # axis cannot land in it however little is known about it. What
+        # it gets is a shape of `axis` and a label saying which.
+        got = self.dev({'index': 0})
         one = got.axis_group(0)
         assert one is not None
-        self.assertNotEqual('unknown', one.kind)
+        self.assertEqual('axis', one.kind)
+        self.assertFalse(one.status)
         self.assertIn('axis 0', one.label)
 
     def test_it_says_nothing_the_writer_would_leave_out(self):
         # An empty `states` is the default, and the writer omits it. Put
         # in here, every such control differed from its own file for ever.
-        got = self.dev({'index': 4, 'kind': 'lever', 'label': 'Side lever',
-                        'source': 'measured'})
+        got = self.dev({'index': 4})
         raw = next(g for g in got._raw['group'] if g.get('axes') == [4])
         self.assertNotIn('states', raw)
+
+
+class AnAxisDoesNotNameItself(unittest.TestCase):
+    """The file held two answers to `what is this` -- one on the axis, one
+    on the control that owns it -- and they drifted: an axis calling
+    itself a `slider` inside a control called `Left side dial`. Which
+    answer you got depended on which table you happened to ask."""
+
+    def dev(self):
+        return fake.device(
+            kind='throttle',
+            axes=[fake.axis(0), fake.axis(1), fake.axis(2, rest='min')],
+            groups=[fake.group('ministick', [], label='Thumb mini-stick',
+                               id='mini', axes=[0, 1]),
+                    fake.group('dial', [], label='Left side dial',
+                               id='left-side-dial', axes=[2])])
+
+    def test_the_file_may_not_say_it_twice(self):
+        for said in ({'index': 0, 'kind': 'dial'},
+                     {'index': 0, 'label': 'Slider'}):
+            with self.subTest(said=said):
+                with self.assertRaises(TypeError):
+                    fake.device(axes=[said])
+
+    def test_both_tables_answer_the_same(self):
+        got = self.dev()
+        self.assertEqual([2], [a.index for a in got.axes(kind='dial')])
+        self.assertEqual([[2]], [g.axes for g in got.groups('dial')])
+
+    def test_an_axis_takes_what_its_control_says(self):
+        one = self.dev().axis(2)
+        assert one is not None
+        self.assertEqual('dial', one.kind)
+        self.assertEqual('Left side dial', one.label)
+
+    def test_an_axis_on_its_own_names_nothing(self):
+        # Not an AttributeError, and not a guess either: an axis with no
+        # control behind it has no answer to `what is this`.
+        bare = devicemap.Axis(index=0)
+        self.assertEqual('', bare.kind)
+        self.assertEqual('', bare.label)
+
+    def test_and_says_which_axis_of_it_it_is(self):
+        got = fake.device(
+            kind='throttle',
+            axes=[fake.axis(0, role='x'), fake.axis(1, role='y')],
+            groups=[fake.group('ministick', [], label='Mini', id='m',
+                               axes=[0, 1])])
+        self.assertEqual(['Mini (x)', 'Mini (y)'],
+                         [got.axis_label(n) for n in (0, 1)])
+
+    def test_asking_by_kind_finds_every_axis_of_that_control(self):
+        # A mini-stick is one control and two axes. Asked of the axis
+        # table it used to answer with whichever of them happened to
+        # carry the matching word.
+        got = self.dev()
+        self.assertEqual([0, 1], [a.index for a in got.axes(kind='ministick')])
+
+
+class TheFingerprintIsTwoReadingsNotOne(unittest.TestCase):
+    """`axmap` is the kernel's, in joystick-axis order. `hid` is the
+    report descriptor's, in its own. Zipped into pairs they read like a
+    fact and are not one: this map briefly claimed kernel code 2 carried
+    HID `Ry`, while the axis that code belongs to is `ABS_Z`, usage `Z`."""
+
+    def test_the_two_orders_are_not_the_same_order(self):
+        # The real capture, because this is where it showed: the axis
+        # table pairs them correctly and the two lists do not agree with
+        # that pairing.
+        dev = next(d for d in devicemap.load_all(bare=True)
+                   if d.kind == 'stick')
+        by_axis = [a.hid for a in dev.axes()]
+        self.assertNotEqual(by_axis, dev.fingerprint['hid'])
+
+    def test_which_axis_carries_which_usage_is_on_the_axis(self):
+        dev = next(d for d in devicemap.load_all(bare=True)
+                   if d.kind == 'stick')
+        for a in dev.axes():
+            with self.subTest(axis=a.index):
+                self.assertTrue(a.hid)
+                self.assertTrue(a.evdev)
+
+    def test_the_file_keeps_them_as_two_lists(self):
+        for path in sorted(glob.glob(os.path.join(devicemap.CAPTURES,
+                                                  '*', '*.toml'))):
+            with open(path, 'rb') as fh:
+                fp = tomllib.load(fh).get('fingerprint') or {}
+            with self.subTest(path=os.path.basename(path)):
+                self.assertIsInstance(fp.get('axmap'), list)
+                self.assertIsInstance(fp.get('hid'), list)
+                # Not one list of pairs. A pair asserts an alignment that
+                # neither reading gives.
+                for v in fp.values():
+                    self.assertFalse(any(isinstance(x, dict) for x in v))

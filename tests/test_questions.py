@@ -12,7 +12,9 @@ empty list -- both silent, and a silent question is one you find out about
 by noticing the wizard never asked you something.
 """
 
+import os
 import unittest
+from unittest import mock
 
 import questions as q
 
@@ -335,3 +337,292 @@ class EditingIsTheSamePath(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TheQuestionIsTheHeader(unittest.TestCase):
+    """The five ergonomic facts used to be headed by a label -- `found
+    without looking` -- with the question a line inside the panel beside
+    it, and answers (`high`, `low`, `none`) that did not answer it. You
+    read the header, then hunted for what you were being asked."""
+
+    def asks(self):
+        return q.read().of(q.ALL)
+
+    def test_every_one_of_them_is_asked_as_a_question(self):
+        for a in self.asks():
+            with self.subTest(ask=a.id):
+                self.assertTrue(a.says.endswith('?'), a.says)
+
+    def test_it_asks_about_one_control_not_about_the_list(self):
+        # "Which ones can you hold down?" is asked of the set, and the
+        # screen it heads is answered one control at a time.
+        for a in self.asks():
+            with self.subTest(ask=a.id):
+                self.assertNotIn('Which ones', a.says)
+
+    def test_every_answer_it_offers_is_an_answer_to_it(self):
+        sheet = q.read()
+        for a in self.asks():
+            for c in sheet.choices(a):
+                with self.subTest(ask=a.id, answer=c['says']):
+                    self.assertIn(c['says'], ('yes', 'somewhat', 'no'))
+
+
+#: Every descriptor has to describe the postures, because their ORDER is
+#: the tier. A sheet written for one small rule still carries them.
+LEVELS_TOML = ''.join(
+    f'[[vocabulary.level]]\nname = "{n}"\nsays = "somewhere"\n'
+    for n in ('HOME', 'EXTENDED', 'BASE', 'OFF'))
+
+
+class TheDescriptorMayNotOfferWhatTheReaderRefuses(unittest.TestCase):
+    """The words for a shape live in the descriptor and the closed list of
+    them lives in the reader. A shape offered on screen that the reader
+    will not accept is a capture you cannot save."""
+
+    def sheet(self, voc, name):
+        return ('[[ask]]\nid = "x"\nof = "control"\nhow = "pick"\n'
+                f'says = "?"\nsets = "kind"\nuses = "{voc}"\n'
+                f'[[vocabulary.{voc}]]\nname = "{name}"\nsays = "a thing"\n'
+                + LEVELS_TOML)
+
+    def read(self, text):
+        import tempfile
+        with tempfile.NamedTemporaryFile('w', suffix='.toml',
+                                         delete=False) as fh:
+            path = fh.name
+            fh.write(text)
+        try:
+            return q.read(path)
+        finally:
+            os.unlink(path)
+
+    def test_a_shape_the_reader_never_heard_of(self):
+        with self.assertRaises(ValueError) as caught:
+            self.read(self.sheet('kind', 'wobbler'))
+        self.assertIn('wobbler', str(caught.exception))
+
+    def test_an_axis_kind_it_never_heard_of(self):
+        with self.assertRaises(ValueError):
+            self.read(self.sheet('axis_kind', 'flapper'))
+
+    def test_and_the_real_descriptor_agrees_with_the_reader(self):
+        sheet = q.read()
+        import devicemap
+        self.assertTrue({c['name'] for c in sheet.vocabulary['kind']}
+                        <= set(devicemap.SHAPES))
+        self.assertTrue({c['name'] for c in sheet.vocabulary['axis_kind']}
+                        <= set(devicemap.AXIS_KINDS))
+
+
+class AScaleIsStoredAsItsNumber(unittest.TestCase):
+    """A vocabulary either names things or grades them. A graded one
+    carries `value`, and that number is what reaches the file: `low` and
+    `high` only sort while two places agree which way round they go."""
+
+    def sheet(self, entry):
+        return {'ask': [{'id': 'x', 'of': 'all', 'how': 'pick',
+                         'says': 'Well?', 'sets': 'x', 'uses': 'v'}],
+                'vocabulary': {'v': [entry],
+                               'level': [{'name': n, 'says': 'somewhere'}
+                                         for n in ('HOME', 'EXTENDED',
+                                                   'BASE', 'OFF')]}}
+
+    def read(self, entry):
+        import tempfile
+        with tempfile.NamedTemporaryFile('w', suffix='.toml',
+                                         delete=False) as fh:
+            path = fh.name
+            fh.write(_toml(self.sheet(entry)))
+        try:
+            return q.read(path)
+        finally:
+            os.unlink(path)
+
+    def test_a_number_is_what_gets_stored(self):
+        self.assertEqual(3, q.stored({'value': 3, 'says': 'yes'}))
+
+    def test_a_name_is_what_gets_stored_where_there_is_no_number(self):
+        self.assertEqual('hat4', q.stored({'name': 'hat4', 'says': 'hat'}))
+
+    def test_a_scale_written_as_a_word_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.read({'value': 'high', 'says': 'yes'})
+
+    def test_an_entry_that_is_both_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.read({'name': 'high', 'value': 2, 'says': 'yes'})
+
+    def test_an_entry_that_is_neither_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.read({'says': 'yes'})
+
+
+def _toml(data):
+    """Just enough TOML to write the one-question sheets above."""
+    out = []
+    for a in data['ask']:
+        out.append('[[ask]]')
+        out += [f'{k} = "{v}"' for k, v in a.items()]
+    for name, entries in data['vocabulary'].items():
+        for c in entries:
+            out.append(f'[[vocabulary.{name}]]')
+            out += [f'{k} = ' + (f'"{v}"' if isinstance(v, str) else str(v))
+                    for k, v in c.items()]
+    return '\n'.join(out) + '\n'
+
+
+class ThePosturesAreOneTable(unittest.TestCase):
+    """Their ORDER is the tier -- `LEVELS.index` is how far a control is --
+    and their words are what a screen prints. Those lived in two tables
+    and had already come apart: the reader knew four postures, the
+    descriptor three, and `OFF` was written by the tool with no word for
+    it anywhere."""
+
+    def test_the_two_tables_are_the_same_list_in_the_same_order(self):
+        import devicemap
+        said = tuple(c['name'] for c in q.read().vocabulary['level'])
+        self.assertEqual(devicemap.LEVELS, said)
+
+    def test_a_missing_posture_is_refused(self):
+        import devicemap
+        with mock.patch.object(devicemap, 'LEVELS',
+                               ('HOME', 'EXTENDED', 'BASE', 'OFF', 'MOON')):
+            with self.assertRaises(ValueError) as caught:
+                q.read()
+        self.assertIn('MOON', str(caught.exception))
+
+    def test_a_different_order_is_refused(self):
+        # Not a set: swapping two of them keeps every word and changes
+        # how far away half the controls are.
+        import devicemap
+        with mock.patch.object(devicemap, 'LEVELS',
+                               ('EXTENDED', 'HOME', 'BASE', 'OFF')):
+            with self.assertRaises(ValueError):
+                q.read()
+
+    def test_every_posture_has_words_for_a_screen(self):
+        for c in q.read().vocabulary['level']:
+            with self.subTest(level=c['name']):
+                self.assertTrue(c.get('says'))
+                self.assertTrue(c.get('hint'))
+
+    def test_but_not_every_posture_is_a_round_you_walk(self):
+        # There is no round to walk with your hand off the device --
+        # offering one asks you to press what you cannot touch.
+        sheet = q.read()
+        self.assertEqual(['HOME', 'EXTENDED', 'BASE'],
+                         [c['name'] for c in q.walkable(sheet)])
+        self.assertIn('OFF', [c['name'] for c in sheet.vocabulary['level']])
+
+
+class EveryWidgetAndFieldTheDescriptorNames(unittest.TestCase):
+    """`how` and `sets` were the two words in the descriptor nothing
+    checked. A wrong `how` reached `ask_one`, which raises -- in the
+    middle of a capture, with curses up. A wrong `sets` on a question
+    asked of every control was found on the NEXT load, by which time you
+    had answered thirty controls into a field nothing reads."""
+
+    def sheet(self, **ask):
+        said = {'id': 'x', 'of': 'all', 'how': 'tick', 'says': 'Well?',
+                'sets': 'hold_ok'}
+        said.update(ask)
+        out = ['[[ask]]'] + [f'{k} = "{v}"' for k, v in said.items()]
+        return '\n'.join(out) + '\n' + LEVELS_TOML
+
+    def read(self, text):
+        import tempfile
+        with tempfile.NamedTemporaryFile('w', suffix='.toml',
+                                         delete=False) as fh:
+            path = fh.name
+            fh.write(text)
+        try:
+            return q.read(path)
+        finally:
+            os.unlink(path)
+
+    def test_a_widget_nothing_draws(self):
+        with self.assertRaises(ValueError) as caught:
+            self.read(self.sheet(how='pik'))
+        self.assertIn('pik', str(caught.exception))
+
+    def test_and_it_says_which_ones_there_are(self):
+        with self.assertRaises(ValueError) as caught:
+            self.read(self.sheet(how='pik'))
+        self.assertIn('collect', str(caught.exception))
+
+    def test_a_field_no_control_has(self):
+        with self.assertRaises(ValueError) as caught:
+            self.read(self.sheet(sets='hold_okay'))
+        self.assertIn('hold_okay', str(caught.exception))
+
+    def test_a_control_question_files_its_answer_where_it_likes(self):
+        # `sets` on a control question is the name an answer is filed
+        # under while the walk runs -- `buttons`, `push`, `silent_at` --
+        # and `build_group` folds those into the file. Only a question
+        # asked of every control writes the field directly.
+        self.read(self.sheet(of='control', how='press', sets='push'))
+
+    def test_every_widget_declared_is_one_the_descriptor_uses(self):
+        # Otherwise the list grows words nothing draws, which is how it
+        # came to be worth checking in the first place.
+        used = {a.how for a in q.read().asks}
+        self.assertEqual(set(q.WIDGETS), used)
+
+    def test_and_every_fact_asked_of_all_is_a_field_of_a_control(self):
+        import dataclasses, devicemap
+        fields = {f.name for f in dataclasses.fields(devicemap.Group)}
+        for a in q.read().of(q.ALL):
+            with self.subTest(ask=a.id):
+                self.assertIn(a.sets, fields)
+
+
+class AVocabularyEntryMayNotSayWhatNothingReads(unittest.TestCase):
+    """`[[ask]]` is a dataclass and refuses `notee` outright. A vocabulary
+    entry is a plain dict, so it took `hnit` and dropped the hint off
+    every screen that shows that choice."""
+
+    def sheet(self, entry):
+        out = ['[[ask]]', 'id = "x"', 'of = "control"', 'how = "pick"',
+               'says = "?"', 'sets = "kind"', 'uses = "v"',
+               '[[vocabulary.v]]']
+        for k, v in entry.items():
+            out.append(f'{k} = ' + (f'"{v}"' if isinstance(v, str)
+                                    else str(v).lower()))
+        return '\n'.join(out) + '\n' + LEVELS_TOML
+
+    def read(self, entry):
+        import tempfile
+        with tempfile.NamedTemporaryFile('w', suffix='.toml',
+                                         delete=False) as fh:
+            path = fh.name
+            fh.write(self.sheet(entry))
+        try:
+            return q.read(path)
+        finally:
+            os.unlink(path)
+
+    def test_a_misspelt_key_is_refused(self):
+        with self.assertRaises(ValueError) as caught:
+            self.read({'name': 'button', 'says': 'a button', 'hnit': 'x'})
+        self.assertIn('hnit', str(caught.exception))
+
+    def test_and_it_says_which_keys_there_are(self):
+        with self.assertRaises(ValueError) as caught:
+            self.read({'name': 'button', 'says': 'a button', 'hnit': 'x'})
+        self.assertIn('hint', str(caught.exception))
+
+    def test_an_entry_with_no_words_is_refused(self):
+        # Every entry reaches a screen. One with nothing to print is a
+        # blank row you cannot tell from the one above it.
+        with self.assertRaises(ValueError):
+            self.read({'name': 'button'})
+
+    def test_a_good_entry_loads(self):
+        self.read({'name': 'button', 'says': 'a button'})
+
+    def test_the_real_descriptor_says_nothing_odd(self):
+        for name, entries in q.read().vocabulary.items():
+            for c in entries:
+                with self.subTest(vocabulary=name):
+                    self.assertFalse(set(c) - set(q.ENTRY_KEYS))

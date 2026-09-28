@@ -21,7 +21,10 @@ how many went.
 """
 
 import os
+import dataclasses
 import tomllib
+
+import devicemap
 from dataclasses import dataclass, field
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -31,8 +34,26 @@ SHEET = os.path.join(HERE, 'questions.toml')
 #: these three and not one.
 CONTROL, DEVICE, ALL = 'control', 'device', 'all'
 
-#: Shapes that press in as well as doing whatever else they do.
-CLICKS = ('hat2', 'hat4', 'hat8', 'encoder', 'ministick', 'dial')
+#: Every widget a question may be drawn with. `ask_one` draws all but
+#: `rounds`, which is a whole-device pass and has its own screen.
+#:
+#: Closed, and checked when the descriptor loads. A typo here used to
+#: reach `ask_one`, which raises -- in the middle of a capture, with
+#: curses up, after you had answered everything before it.
+WIDGETS = ('collect', 'pick', 'tick', 'name', 'press', 'watch', 'sort',
+           'slot', 'rounds')
+
+#: What a vocabulary entry may say. Closed for the same reason `[[ask]]`
+#: is: a dataclass refuses `notee` outright, and a plain dict took `hnit`
+#: and dropped the hint off every screen that shows that choice.
+#:
+#:   name/value  what choosing it stores -- see `stored`
+#:   says        the words for it
+#:   hint        lines under it while the cursor is on it
+#:   dirs        the positions it brings with it (a hat knows its own)
+#:   asks_way    it points somewhere and the shape does not say where
+#:   walked      false for a level that is not a round you walk
+ENTRY_KEYS = ('name', 'value', 'says', 'hint', 'dirs', 'asks_way', 'walked')
 
 #: Keys a vocabulary entry carries into the answers beside its own name.
 #: Picking `hat4` says the control has four positions AND what they are
@@ -56,6 +77,35 @@ class Ask:
     skip: bool = False      # RETURN is a valid answer meaning "none"
 
 
+#: What a control can be asked about, straight off the class that holds
+#: it. Not a list here: a second one would be a second thing to keep in
+#: step with the reader.
+_GROUP_FIELDS = frozenset(f.name for f in
+                          dataclasses.fields(devicemap.Group))
+
+
+def walkable(sheet):
+    """The postures a reach round can be walked in.
+
+    Not every level is one. OFF is where a control ends up when no round
+    reached it -- there is no round to walk with your hand off the
+    device, and offering one asks you to press what you cannot touch.
+    """
+    return [c for c in sheet.vocabulary.get('level', ())
+            if c.get('walked', True)]
+
+
+def stored(entry):
+    """What choosing this entry writes to the file.
+
+    A vocabulary is either a set of names -- `trigger`, `HOME` -- or a
+    scale, and a scale carries `value`, a number. The number is the point:
+    `low` and `high` only sort because somebody remembered which way round
+    they went, and the day two places remember differently nothing says so.
+    """
+    return entry['value'] if 'value' in entry else entry['name']
+
+
 @dataclass
 class Sheet:
     asks: list = field(default_factory=list)
@@ -69,9 +119,9 @@ class Sheet:
         """What an `uses` question offers, as [{name, says, hint, ...}]."""
         return list(self.vocabulary.get(ask.uses, ()))
 
-    def choice(self, ask, name):
-        """One entry of that vocabulary, by name."""
-        return next((c for c in self.choices(ask) if c['name'] == name), None)
+    def choice(self, ask, answer):
+        """One entry of that vocabulary, by what it is stored as."""
+        return next((c for c in self.choices(ask) if stored(c) == answer), None)
 
 
 def read(path=SHEET):
@@ -105,8 +155,56 @@ def check(sheet):
             raise ValueError(f'{a.id}: only = {a.only!r} names no rule')
         if a.uses and a.uses not in sheet.vocabulary:
             raise ValueError(f'{a.id}: uses = {a.uses!r} names no vocabulary')
+        if a.how not in WIDGETS:
+            raise ValueError(f'{a.id}: how = {a.how!r} is no widget;'
+                             f' one of {", ".join(WIDGETS)}')
         if a.how in ('pick', 'tick') and not a.uses and a.of != ALL:
             raise ValueError(f'{a.id}: {a.how} with nothing to pick from')
+        # `sets` is the name an answer is filed under, and for a question
+        # asked of every control it is the field itself -- `_set_fact`
+        # writes it straight onto the group and into the file. A typo
+        # there was found on the next load, by which time you had
+        # answered thirty controls into a field nothing reads.
+        if a.of == ALL and a.sets not in _GROUP_FIELDS:
+            raise ValueError(f'{a.id}: sets = {a.sets!r} is no field of a'
+                             ' control')
+    # The names a control may carry are closed by the reader, and the
+    # words for them live here. Two lists, one truth: a shape offered on
+    # screen that the reader will not accept is a capture you cannot save.
+    # Which shapes latch and which click are facts about shapes, and the
+    # reader owns the list of shapes. The descriptor owns only the words,
+    # so there is nowhere for the two to disagree.
+    for table in (devicemap.LATCHING, devicemap.CLICKS):
+        if set(table) - set(devicemap.SHAPES):
+            raise ValueError(f'{sorted(set(table) - set(devicemap.SHAPES))}'
+                             ' is not a shape')
+    # The ORDER of the levels is the tier, so this is not a subset check:
+    # the two tables have to be the same list in the same order, or the
+    # words on screen and the distance they stand for come apart.
+    said = tuple(c['name'] for c in sheet.vocabulary.get('level', ()))
+    if said != devicemap.LEVELS:
+        raise ValueError(f'level: {said} is not {devicemap.LEVELS}')
+    for voc, closed in (('kind', devicemap.SHAPES),
+                        ('axis_kind', devicemap.AXIS_KINDS)):
+        offered = {c['name'] for c in sheet.vocabulary.get(voc, ())}
+        if offered - set(closed):
+            raise ValueError(f'{voc}: offers {sorted(offered - set(closed))},'
+                             ' which devicemap will not accept')
+    for name, entries in sheet.vocabulary.items():
+        for c in entries:
+            odd = sorted(set(c) - set(ENTRY_KEYS))
+            if odd:
+                raise ValueError(f'{name}: {c.get("name", c.get("value"))!r}'
+                                 f' says {odd}, which nothing reads;'
+                                 f' one of {", ".join(ENTRY_KEYS)}')
+            if 'says' not in c:
+                raise ValueError(f'{name}: an entry with no words for it: {c}')
+            if ('name' in c) == ('value' in c):
+                raise ValueError(f'{name}: an entry is stored as its name or'
+                                 f' as its value, never both or neither: {c}')
+            if 'value' in c and not isinstance(c['value'], int):
+                raise ValueError(f'{name}: value = {c["value"]!r} is not a'
+                                 ' number, so it does not sort')
     return sheet
 
 
@@ -121,7 +219,7 @@ def check(sheet):
 #: control is good for by matching strings.
 ONLY = {
     'always': lambda said: True,
-    'can_click': lambda said: said.get('kind') in CLICKS,
+    'can_click': lambda said: said.get('kind') in devicemap.CLICKS,
     'is_trigger': lambda said: said.get('kind') == 'trigger',
     'is_selector': lambda said: said.get('kind') == 'selector',
     # NOT `and not said.get('dirs')`. That reads as "we have not been told
@@ -131,6 +229,9 @@ ONLY = {
     'has_directions': lambda said: len(said.get('dirs') or ()) > 1,
     'found_rest_contact': lambda said: (said.get('pull')
                                         or {}).get('rest') is not None,
+    # Only something that STAYS where you put it can have a place the game
+    # never hears about. A sprung control is either sending or at rest.
+    'may_sit_silent': lambda said: said.get('kind') in devicemap.LATCHING,
 }
 
 

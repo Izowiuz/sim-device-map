@@ -66,21 +66,56 @@ class ARoundTrip(unittest.TestCase):
         self.assertEqual([2, 3], g.buttons)
 
     def test_an_axis_comes_back_whole(self):
-        data = fake.raw(axes=[fake.axis(3, 'lever', evdev='ABS_RX', hid='Rx',
-                                        rest='mid', travel='analog',
-                                        label='Left throttle lever',
+        data = fake.raw(axes=[fake.axis(3, evdev='ABS_RX', hid='Rx',
+                                        rest='mid', stepped=False, role='x',
+                                        range=65534, noise=3,
                                         moves_with=[4],
                                         coupling='switchable')])
         back, _ = written(data)
         a = back['axis'][0]
         self.assertEqual(3, a['index'])
         self.assertEqual('Rx', a['hid'])
-        self.assertEqual('Left throttle lever', a['label'])
+        self.assertEqual('x', a['role'])
+        # What it IS and what it is called are the control's to say.
+        self.assertNotIn('kind', a)
+        self.assertNotIn('label', a)
+        self.assertIs(False, a['stepped'])
+        self.assertEqual(65534, a['range'])
+        self.assertEqual(3, a['noise'])
+
+    def test_the_writer_never_puts_a_name_on_an_axis(self):
+        # Poked in behind the reader's back, because the reader refuses
+        # it: this pins the writer's own list of what an axis may carry,
+        # which is the other half of the file holding one answer.
+        dev, box = fake.on_disk(fake.raw(axes=[fake.axis(0)]))
+        try:
+            dev._raw['axis'][0].update({'kind': 'dial', 'label': 'Wheel'})
+            capture.write_device(dev)
+            with open(dev.path, 'rb') as fh:
+                back = tomllib.load(fh)
+        finally:
+            box.cleanup()
+        self.assertNotIn('kind', back['axis'][0])
+        self.assertNotIn('label', back['axis'][0])
+
+    def test_a_measurement_of_zero_is_still_a_measurement(self):
+        # An axis that does not wander at all is the best kind, and
+        # `if a.get(k)` would drop exactly that one back to unmeasured.
+        data = fake.raw(axes=[fake.axis(0, noise=0, stepped=False)])
+        back, _ = written(data)
+        self.assertEqual(0, back['axis'][0]['noise'])
+        self.assertIs(False, back['axis'][0]['stepped'])
+
+    def test_an_axis_nobody_swept_says_nothing_about_sweeping(self):
+        data = fake.raw(axes=[fake.axis(0)])
+        _back, text = written(data)
+        self.assertNotIn('stepped', text)
+        self.assertNotIn('noise', text)
 
     def test_twice_through_changes_nothing(self):
         data = fake.raw(groups=[fake.group('button', [0], label='Pinky'),
                                 fake.group('hat4', [1, 2, 3, 4], push=5)],
-                        axes=[fake.axis(0, 'stick-x')])
+                        axes=[fake.axis(0)])
         once, text_once = written(data)
         twice, text_twice = written(once)
         self.assertEqual(text_once, text_twice)
@@ -136,10 +171,14 @@ class TheShapeOfTheFile(unittest.TestCase):
         self.assertIn('# Axis facts are measured.', text)
 
     def test_the_uncaptured_bucket_sorts_last(self):
-        data = fake.raw(groups=[fake.group('unknown', [9], label='Not yet'),
+        data = fake.raw(groups=[fake.bucket([9], label='Not yet'),
                                 fake.group('button', [0])], buttons=10)
         back, _ = written(data)
-        self.assertEqual('unknown', back['group'][-1]['kind'])
+        last = back['group'][-1]
+        self.assertEqual('uncaptured', last['status'])
+        # One or the other. A row that is not a control has no shape, and
+        # the word used to sit in `kind` where nothing could check it.
+        self.assertNotIn('kind', last)
 
     def test_groups_sort_by_their_lowest_button(self):
         data = fake.raw(groups=[fake.group('button', [7]),
@@ -186,3 +225,93 @@ class WhenItGoesWrong(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class AGradedFactIsANumber(unittest.TestCase):
+    """`blind_distinct` and `accident_risk` are scales, so they go in the
+    file as the number that orders them, never as the word for it. The
+    words live in the vocabulary and can be reworded; a file full of
+    `high` and `low` only sorts because two places remember which way
+    round they went."""
+
+    SCALES = ('blind_distinct', 'accident_risk')
+
+    def round_trip(self, field, value):
+        data = fake.raw(groups=[fake.group('button', [0], label='One',
+                                           **{field: value})])
+        back, text = written(data)
+        return devicemap.Group(**back['group'][0]), text
+
+    def test_every_answer_survives_including_the_lowest(self):
+        # Nothing here is a truth test: a control answered `no` is
+        # answered, and `if g.get(k)` would drop it on the way out.
+        for field in self.SCALES:
+            for value in (0, 1, 2):
+                with self.subTest(field=field, value=value):
+                    g, _ = self.round_trip(field, value)
+                    self.assertEqual(value, getattr(g, field))
+
+    def test_the_lowest_answer_is_an_answer_and_not_a_silence(self):
+        for field in self.SCALES:
+            with self.subTest(field=field):
+                g, _ = self.round_trip(field, 0)
+                self.assertEqual('measured', g.told(field))
+                self.assertEqual(0, g.fact(field))
+
+    def test_an_unanswered_one_is_not_written_at_all(self):
+        data = fake.raw(groups=[fake.group('button', [0], label='One')])
+        _back, text = written(data)
+        for field in self.SCALES:
+            with self.subTest(field=field):
+                self.assertNotIn(field, text)
+
+    def test_it_is_a_number_on_the_page_and_not_a_word(self):
+        for field in self.SCALES:
+            with self.subTest(field=field):
+                _g, text = self.round_trip(field, 2)
+                said = next(ln for ln in text.splitlines()
+                            if ln.startswith(field))
+                self.assertNotIn('"', said)
+                self.assertEqual('2', said.split('=')[1].strip())
+
+
+class APositionThatSendsNothing(unittest.TestCase):
+    """The centre of an ON-OFF-(ON) is a real place to leave the handle and
+    the game never hears about it. Nothing can measure that: a position
+    sending nothing looks exactly like a position that is not there."""
+
+    def built(self, silent_at):
+        return capture.states_of('switch3', [7, 8], names=('on', 'off'),
+                                 silent_at=silent_at)
+
+    def test_it_goes_in_the_order_it_sits_in(self):
+        got = self.built(1)
+        self.assertEqual([7, None, 8], [s.get('button') for s in got])
+        self.assertIs(False, got[1]['emits_signal'])
+
+    def test_first_and_last_are_reachable(self):
+        self.assertEqual([None, 7, 8],
+                         [s.get('button') for s in self.built(0)])
+        self.assertEqual([7, 8, None],
+                         [s.get('button') for s in self.built(2)])
+
+    def test_none_leaves_the_control_as_it_was(self):
+        got = self.built(None)
+        self.assertEqual([7, 8], [s.get('button') for s in got])
+        self.assertNotIn('emits_signal', got[0])
+
+    def test_it_latches_with_the_rest_of_the_switch(self):
+        # It is a detent you leave the handle in, so it stays put like
+        # every other position on the same switch.
+        self.assertIs(True, self.built(1)[1]['latching'])
+
+    def test_it_survives_the_file(self):
+        data = fake.raw(groups=[dict(
+            fake.group('switch3', [7, 8], names=['on', 'off'], label='Mode'),
+            states=self.built(1))])
+        back, _ = written(data)
+        g = devicemap.Group(**back['group'][0])
+        self.assertEqual(3, len(g.places))
+        self.assertEqual([False], [p.emits_signal for p in g.places
+                                   if not p.emits_signal])
+        self.assertEqual([7, 8], g.buttons)

@@ -15,7 +15,9 @@ import os
 import unittest
 from unittest import mock
 
+import capture
 import devicemap
+import questions as q
 import fake
 
 
@@ -36,24 +38,24 @@ class HowFarAControlIs(unittest.TestCase):
         return dev.under(a_rig({'pinky': spots})).groups()[0]
 
     def test_the_normal_grip_is_nearest(self):
-        g = self.under([{'part': 'stick', 'level': 'HOME', 'finger': 'thumb'}])
+        g = self.under([{'level': 'HOME', 'finger': 'thumb'}])
         self.assertEqual(0, g.tier)
 
     def test_stretching_a_finger_costs_one(self):
-        g = self.under([{'part': 'stick', 'level': 'EXTENDED',
+        g = self.under([{'level': 'EXTENDED',
                          'finger': 'pinky'}])
         self.assertEqual(1, g.tier)
 
     def test_letting_go_of_the_device_costs_most(self):
-        g = self.under([{'part': 'panel', 'level': 'OFF'}])
+        g = self.under([{'level': 'OFF'}])
         self.assertEqual(3, g.tier)
 
     def test_the_nearest_way_wins(self):
         # Reachable from the base as well as under the thumb. It is a thumb
         # control: the awkward way it can also be reached says nothing about
         # how fast it is.
-        g = self.under([{'part': 'stick_base', 'level': 'BASE'},
-                        {'part': 'stick', 'level': 'HOME',
+        g = self.under([{'level': 'BASE'},
+                        {'level': 'HOME',
                          'finger': 'thumb'}])
         self.assertEqual(0, g.tier)
 
@@ -174,7 +176,7 @@ class TheRigOnFile(UnderEachRig, unittest.TestCase):
                 for ctrl, spots in (said.get('access') or {}).items():
                     for spot in spots:
                         with self.subTest(ctrl=ctrl):
-                            self.assertIn(spot['part'], devicemap.PARTS)
+                            self.assertNotIn('part', spot)
                             self.assertIn(spot['level'], devicemap.LEVELS)
                             self.assertIn(spot.get('finger', ''),
                                           ('',) + devicemap.FINGERS)
@@ -225,8 +227,8 @@ class WhatAMeasuredReachLooksLike(UnderEachRig, unittest.TestCase):
             for g in dev.groups(bindable=True):
                 for spot in g.access:
                     with self.subTest(dev=dev.slug, ctrl=g.id):
-                        self.assertIn(spot.part, devicemap.PARTS)
                         self.assertIn(spot.level, devicemap.LEVELS)
+                        self.assertTrue(spot.part.startswith(dev.role))
                         self.assertIn(spot.finger, ('',) + devicemap.FINGERS)
 
     def test_a_control_is_as_far_as_its_nearest_way_of_reaching_it(self):
@@ -249,7 +251,7 @@ class WhatAMeasuredReachLooksLike(UnderEachRig, unittest.TestCase):
         # nobody has done, so every spot a walk wrote has to have one.
         for rig in devicemap.load_profiles():
             for said in rig.devices:
-                walked = {tuple(r) for r in said.get('rounds') or []}
+                walked = devicemap.walked(said)
                 for ctrl, spots in (said.get('access') or {}).items():
                     for spot in spots:
                         if spot.get('finger'):
@@ -384,3 +386,215 @@ class WhereTheDesksAreRead(unittest.TestCase):
                              clear=True):
             self.assertEqual(os.path.join(devicemap.HERE, 'captures'),
                              importlib.reload(devicemap).CAPTURES)
+
+
+class WhatTheReaderRefuses(unittest.TestCase):
+    """`DIRECTIONS`, `ROLES`, `LEVELS` and the rest were each declared
+    closed in a comment and enforced nowhere. A typo in a hand-edited
+    file read as a control no rule matched, which looks exactly like a
+    control nobody wants and says nothing about itself."""
+
+    def dev(self, **group):
+        return lambda: fake.device(groups=[fake.group('button', [0], **group)])
+
+    def test_a_shape_nothing_knows(self):
+        with self.assertRaises(ValueError) as caught:
+            fake.device(groups=[fake.group('wobbler', [0])])
+        self.assertIn('wobbler', str(caught.exception))
+
+    def test_a_direction_that_is_a_spelling(self):
+        with self.assertRaises(ValueError) as caught:
+            fake.device(groups=[fake.group('hat2', [0, 1],
+                                           dirs=['forward', 'back'])])
+        self.assertIn('forward', str(caught.exception))
+
+    def test_a_role_nothing_knows(self):
+        bad = dict(fake.group('button', [0]),
+                   states=[{'button': 0, 'role': 'wiggle'}])
+        with self.assertRaises(ValueError):
+            fake.device(groups=[bad])
+
+    def test_a_status_nothing_knows(self):
+        with self.assertRaises(ValueError):
+            fake.device(groups=[fake.group('', [0], status='mislaid')])
+
+    def test_both_a_shape_and_a_status(self):
+        # One or the other. A row that is not a control has no shape.
+        with self.assertRaises(ValueError):
+            fake.device(groups=[fake.group('button', [0], status='unwired')])
+
+    def test_an_axis_role_nothing_knows(self):
+        with self.assertRaises(ValueError) as caught:
+            fake.device(axes=[fake.axis(0, role='sideways')],
+                        groups=[fake.group('lever', [], axes=[0],
+                                           label='Lever')])
+        self.assertIn('sideways', str(caught.exception))
+        self.assertIn('axis 0', str(caught.exception))
+
+    def test_an_axis_may_not_say_what_it_is(self):
+        # That is the control's answer. Two copies of it drifted: an axis
+        # calling itself a `slider` inside a control called a dial.
+        with self.assertRaises(TypeError):
+            fake.device(axes=[{'index': 0, 'kind': 'lever'}])
+        with self.assertRaises(TypeError):
+            fake.device(axes=[{'index': 0, 'label': 'Side lever'}])
+
+    def test_and_what_it_says_names_the_file_and_the_field(self):
+        with self.assertRaises(ValueError) as caught:
+            fake.device(groups=[fake.group('wobbler', [0], label='Thing')])
+        said = str(caught.exception)
+        self.assertIn('fake-stick', said)
+        self.assertIn('kind', said)
+        self.assertIn('button', said)       # and what it could have said
+
+
+class WhatADeskMayNotSay(unittest.TestCase):
+    """A desk is read after the captures, so it can name a posture, a
+    finger or a control that no device has. That is the desk's mistake."""
+
+    def desk(self, **entry):
+        dev = fake.device(groups=[fake.group('button', [0], id='one')])
+        prof = devicemap.Profile({'name': 'x', 'device': [
+            dict({'slug': dev.slug, 'hand': 'left'}, **entry)]}, '<x>')
+        return prof, [dev]
+
+    def test_a_posture_that_is_not_one(self):
+        # At construction, not on the way through `load_all`: `under()`
+        # is called directly by the capture tool and by every test, and
+        # an unchecked desk laid over a device used to turn a typo into
+        # `furthest away` without a word.
+        with self.assertRaises(ValueError) as caught:
+            self.desk(access={'one': [{'level': 'NEARLY'}]})
+        self.assertIn('NEARLY', str(caught.exception))
+
+    def test_a_finger_nobody_has(self):
+        with self.assertRaises(ValueError):
+            self.desk(access={'one': [{'level': 'HOME', 'finger': 'elbow'}]})
+
+    def test_a_control_the_device_does_not_have(self):
+        prof, devs = self.desk(access={'ghost': [{'level': 'HOME'}]})
+        with self.assertRaises(ValueError) as caught:
+            devicemap.check_spots(prof, devs)
+        self.assertIn('ghost', str(caught.exception))
+
+    def test_a_device_nobody_captured(self):
+        dev = fake.device(groups=[fake.group('button', [0], id='one')])
+        prof = devicemap.Profile({'name': 'x', 'device': [
+            {'slug': 'not-a-thing', 'hand': 'left'}]}, '<x>')
+        with self.assertRaises(ValueError) as caught:
+            devicemap.check_spots(prof, [dev])
+        self.assertIn('not-a-thing', str(caught.exception))
+
+    def test_a_round_in_a_posture_that_is_not_one(self):
+        with self.assertRaises(ValueError):
+            self.desk(rounds=[{'level': 'SOMEWHERE'}])
+
+    def test_and_a_tier_no_longer_has_a_fallback(self):
+        # Nothing can build a spot with a posture that is not one, so the
+        # `else len(LEVELS)` that stood in for it had nothing to stand in
+        # for -- and what it stood in for was silence.
+        for n, level in enumerate(devicemap.LEVELS):
+            with self.subTest(level=level):
+                self.assertEqual(n, devicemap.Spot(level=level).tier)
+        # And one built by hand out of a posture that is not one says so
+        # instead of quietly reporting the worst reach there is.
+        with self.assertRaises(ValueError):
+            devicemap.Spot(level='NEARLY').tier
+
+    def test_loading_under_a_desk_is_where_it_is_caught(self):
+        # Checked on the way in, not by whoever remembers to ask. A desk
+        # naming a control that is not there used to read as a control
+        # nobody had reached.
+        prof = devicemap.Profile({'name': 'x', 'device': [
+            {'slug': 'not-a-thing', 'hand': 'left'}]}, '<x>')
+        with self.assertRaises(ValueError):
+            devicemap.load_all(rig=prof)
+
+    def test_and_the_desk_on_disk_passes(self):
+        devs = [d for d in devicemap.load_all(bare=True)]
+        for prof in devicemap.load_profiles():
+            with self.subTest(desk=prof.name):
+                devicemap.check_spots(prof, devs)
+
+
+class WhatAnAxisMayNotSay(unittest.TestCase):
+    """`rest` and `coupling` were closed in a comment and checked nowhere,
+    so a hand-edited file could say an axis rests `middle` and every rule
+    that asks whether it centres would quietly answer no."""
+
+    def test_a_resting_place_that_is_not_one(self):
+        with self.assertRaises(ValueError) as caught:
+            fake.device(axes=[fake.axis(0, rest='middle')])
+        self.assertIn('middle', str(caught.exception))
+
+    def test_a_coupling_that_is_not_one(self):
+        with self.assertRaises(ValueError):
+            fake.device(axes=[fake.axis(0, moves_with=[1],
+                                        coupling='glued')])
+
+    def test_a_pair_with_no_word_for_why(self):
+        # Which axes travel with this one, and nothing saying whether a
+        # catch undoes it. Half a fact reads as a fact.
+        with self.assertRaises(ValueError) as caught:
+            fake.device(axes=[fake.axis(0, moves_with=[1])])
+        self.assertIn('coupling', str(caught.exception))
+
+    def test_and_a_word_for_why_with_no_pair(self):
+        with self.assertRaises(ValueError):
+            fake.device(axes=[fake.axis(0, coupling='fixed')])
+
+    def test_a_device_that_is_nothing_a_desk_can_hold(self):
+        with self.assertRaises(ValueError) as caught:
+            fake.device(kind='toaster')
+        self.assertIn('toaster', str(caught.exception))
+
+
+class WhatADeskMayNotCallThings(unittest.TestCase):
+    """`role` and `hand` are the two words a desk says about a device, and
+    neither was checked. `ROLES_ON_A_DESK` lived in the capture tool and
+    the reader's own list said `wheel` where that one said `collective`."""
+
+    def desk(self, **entry):
+        dev = fake.device(groups=[fake.group('button', [0], id='one')])
+        return devicemap.Profile({'name': 'x', 'device': [
+            dict({'slug': dev.slug}, **entry)]}, '<x>'), [dev]
+
+    def test_a_role_no_device_can_have(self):
+        with self.assertRaises(ValueError) as caught:
+            self.desk(role='footrest')
+        self.assertIn('footrest', str(caught.exception))
+
+    def test_a_hand_nobody_has(self):
+        with self.assertRaises(ValueError):
+            self.desk(hand='both')
+
+    def test_one_list_for_what_a_device_is_and_what_it_is_for(self):
+        # They had already drifted: the reader said `wheel`, the capture
+        # tool said `collective`, and a desk could name either.
+        self.assertIs(capture.ROLES_ON_A_DESK, devicemap.ROLES_ON_A_DESK)
+        self.assertIs(capture.HANDS, devicemap.HANDS)
+
+
+class ShapeFactsHaveOneHome(unittest.TestCase):
+    """Which shapes latch and which click are facts about shapes. They sat
+    in the capture tool and, for a while, in the descriptor as well."""
+
+    def test_everything_that_latches_is_a_shape(self):
+        self.assertFalse(set(devicemap.LATCHING) - set(devicemap.SHAPES))
+
+    def test_everything_that_clicks_is_a_shape(self):
+        self.assertFalse(set(devicemap.CLICKS) - set(devicemap.SHAPES))
+
+    def test_a_shape_fact_naming_something_that_is_not_a_shape(self):
+        # Checked when the descriptor loads, not only by this test: the
+        # wizard reads the same tables and gets the same refusal.
+        with mock.patch.object(devicemap, 'LATCHING', ('wobbler',)):
+            with self.assertRaises(ValueError) as caught:
+                q.read()
+        self.assertIn('wobbler', str(caught.exception))
+
+    def test_the_descriptor_does_not_say_it_a_second_time(self):
+        for c in q.read().vocabulary['kind']:
+            with self.subTest(kind=c['name']):
+                self.assertNotIn('latching', c)
+                self.assertNotIn('clicks', c)

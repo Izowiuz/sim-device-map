@@ -41,20 +41,7 @@ SHEET = questions.read()
 KINDS = [(k['name'], k['says'], list(k.get('dirs') or []), list(k['hint']))
          for k in SHEET.vocabulary['kind']]
 
-AXIS_KINDS = [
-    ('stick-x', 'main stick, left/right', ['The flying axis.']),
-    ('stick-y', 'main stick, fore/aft', ['The flying axis. Wants inverting.']),
-    ('twist', 'stick twist', ['Self-centring. Usually rudder.']),
-    ('mini-stick-x', 'mini-stick, horizontal',
-     ['Self-centring thumb stick.', 'Wants a view, cue or aim pair.']),
-    ('mini-stick-y', 'mini-stick, vertical',
-     ['Self-centring thumb stick.', 'Wants a view, cue or aim pair.']),
-    ('lever', 'lever', ['Stays where you leave it. Throttle, collective.']),
-    ('slider', 'slider', ['Resting at minimum makes zero mean off.']),
-    ('dial', 'rotary dial', ['Turns. The nicest home for a trim axis.']),
-    ('pedal', 'pedal', ['Rudder, or a toe brake.']),
-    ('wheel', 'wheel', ['A steering wheel.']),
-]
+
 
 def drain(fd):
     """Swallow the synthetic initial-state burst the kernel sends on open."""
@@ -199,22 +186,49 @@ def what_moved_together(events):
 
 
 def classify_travel(values):
-    """Analogue, or a hat pretending to be an axis?
+    """Does it sweep, or is it a hat pretending to be an axis?
 
     A mini-hat wired to axes only ever reports its extremes and centre, so an
     action wanting proportional control -- aiming, head movement -- gets three
     positions instead of a sweep. Worth knowing before binding one.
+
+    None where too little came in to tell, which is not the same as a
+    sweep: an unmeasured axis used to read as analogue and get a trim.
     """
     if len(values) < 3:
-        return ''
+        return None
     inner = [v for v in values if 6000 < abs(v) < 26000]
-    return 'stepped' if len(set(values)) <= 5 and not inner else 'analog'
+    return len(set(values)) <= 5 and not inner
+
+
+@dataclass
+class Reading:
+    """What moving one axis end to end, then letting go, measured.
+
+    A record and not a tuple of four: two of these are numbers in the same
+    units and one is a flag, and `a, b, c, d = one_axis(...)` at three call
+    sites is three places to get the order wrong.
+    """
+    index: int
+    stepped: bool | None = None
+    #: End to end, in the units the driver reports. How fine the axis is:
+    #: a span of 255 cannot hold a trim however smoothly it moves.
+    range: int | None = None
+    #: How far it wanders with nobody touching it. A noisy centre is what
+    #: makes an axis a bad place for anything absolute.
+    noise: int | None = None
+
+
+#: Seconds of hands-off before the wander is worth quoting. Short enough
+#: to sit through once per axis, long enough that a pot with a twitch has
+#: shown it.
+SETTLE = 3
 
 
 def one_axis(tui, fd, title, help_lines, wanted=None):
-    """Whichever axis moves furthest from where it started.
+    """Whichever axis moves furthest from where it started, measured.
 
-    Returns (index, travel) -- travel says whether it sweeps or steps.
+    Returns a `Reading`, or None if it was given up on.
 
     `wanted` is the one you picked off the list. Saying whether the thing
     under your hand is that one is the only way to find out short of
@@ -224,7 +238,7 @@ def one_axis(tui, fd, title, help_lines, wanted=None):
     start, moved, seen = {}, {}, {}
     while True:
         best = max(moved, key=lambda ax: moved[ax]) if moved else None
-        travel = classify_travel(seen.get(best, [])) if best is not None else ''
+        stepped = classify_travel(seen.get(best, [])) if best is not None else None
         said = [('plain', 'move ONE axis through its full travel,'
                           ' then RETURN'), ('plain', '')]
         if best is not None:
@@ -233,10 +247,10 @@ def one_axis(tui, fd, title, help_lines, wanted=None):
                          + ('' if wanted is None else
                             '   that one' if best == wanted
                             else '   different axis')))
-            if travel:
-                said.append(('meta', 'reports a continuous sweep'
-                             if travel == 'analog' else
-                             'reports only its extremes -- a hat on an axis'))
+            if stepped is not None:
+                said.append(('meta', 'reports only its extremes -- a hat on'
+                             ' an axis' if stepped else
+                             'reports a continuous sweep'))
         tui.screen(title, said + ui.aside_of(help_lines),
                    ('↵ accept', 'ESC cancel'))
         if select.select([fd], [], [], 0.05)[0]:
@@ -247,9 +261,48 @@ def one_axis(tui, fd, title, help_lines, wanted=None):
                     seen.setdefault(num, []).append(val)
         k = tui.key(0)
         if k == 'enter':
-            return (best, travel) if best is not None else (None, '')
+            if best is None:
+                return None
+            got = seen.get(best) or []
+            return Reading(index=best, stepped=stepped,
+                           range=max(got) - min(got) if got else None)
         if k == 'esc':
-            return None, ''
+            return None
+
+
+def settle(tui, fd, title, reading):
+    """How far the axis wanders untouched. Fills in `reading.noise`.
+
+    Its own step and not a corner of the one before it: the sweep wants
+    your hand on the control and this wants it off, and a screen asking
+    for both at once gets neither. Skipping leaves `noise` unmeasured,
+    which is the truth about an axis nobody let settle.
+    """
+    seen = []
+    until = time.monotonic() + SETTLE
+    while True:
+        left = until - time.monotonic()
+        wander = max(seen) - min(seen) if len(seen) > 1 else 0
+        tui.screen(title,
+                   [('plain', f'hands off axis {reading.index}.'),
+                    ('plain', ''),
+                    ('meta' if left > 0 else 'measured',
+                     f'{left:.0f} more' if left > 0 else
+                     f'wanders {wander}' if wander else 'perfectly still')]
+                   + ui.aside_of(['Whatever it does on its own goes in the'
+                                  ' file as noise. An axis with a twitchy'
+                                  ' centre is a bad place for a trim.']),
+                   ('↵ done' if left <= 0 else '', 'ESC skip'))
+        if select.select([fd], [], [], 0.05)[0]:
+            for typ, num, val in _events(fd):
+                if typ & JS_EVENT_AXIS and num == reading.index:
+                    seen.append(val)
+        k = tui.key(0)
+        if k == 'esc':
+            return reading
+        if k == 'enter' and left <= 0:
+            reading.noise = wander
+            return reading
 
 
 # ------------------------------------------------------------------ writing --
@@ -281,7 +334,7 @@ def write_device(dev):
     header = src.split('[device]', 1)[0].rstrip() + '\n\n'
     raw = dev._raw
     out = [header, '[device]']
-    for k in ('slug', 'product', 'vendor', 'kind', 'hand'):
+    for k in ('slug', 'product', 'vendor', 'kind'):
         if raw['device'].get(k):
             out.append(emit_str(k, raw['device'][k], 8))
     for k in ('buttons', 'axes'):
@@ -300,22 +353,28 @@ def write_device(dev):
             out.append('# Contains the firmware build date -- do not match on it.')
             out.append(emit_str('evdev', one['evdev'], pad))
         if one.get('first_seen'):
-            out.append(emit_str('first_seen', one['first_seen'], pad))
+            # A date, not a string: TOML has the type, and a quoted one
+            # cannot be compared or sorted without parsing it first.
+            out.append(emit_raw('first_seen', str(one['first_seen']), pad))
         if one.get('games'):
             out.append('\n[identity.games]')
             w = max(len(g) for g in one['games'])
             for g, v in one['games'].items():
                 out.append(emit_str(g, v, w + 1))
 
-    fp = raw.get('fingerprint') or {}
+    fp = {k: v for k, v in (raw.get('fingerprint') or {}).items()
+          if k in ('axmap', 'hid') and v}
     if fp:
         out.append('\n# Survives an identity change, so the same hardware is still')
         out.append('# recognisable after a reconfiguration -- and a change HERE means')
         out.append('# the buttons may have moved, which makes the grouping suspect.')
+        out.append('# How many buttons and axes it has is in [device]: one count,')
+        out.append('# one place, so there is nothing to keep in step.')
+        out.append('# Two readings, not two halves of one: `axmap` is the')
+        out.append('# kernel\'s, in joystick-axis order, and `hid` the report')
+        out.append('# descriptor\'s, in its own. They are NOT paired -- which')
+        out.append('# axis carries which usage is on its [[axis]] entry.')
         out.append('[fingerprint]')
-        for key in ('buttons', 'axes'):
-            if fp.get(key) is not None:
-                out.append(f'{key:<8}= {fp[key]}')
         for key in ('axmap', 'hid'):
             if fp.get(key):
                 out.append(emit_list(key, list(fp[key]), 8))
@@ -324,9 +383,11 @@ def write_device(dev):
     for a in raw.get('axis', []):
         out.append('\n[[axis]]')
         out.append(emit_raw('index', str(a['index'])))
-        for k in ('evdev', 'hid', 'rest', 'travel', 'kind', 'label'):
+        for k in ('evdev', 'hid', 'rest', 'role'):
             if a.get(k):
                 out.append(emit_str(k, a[k]))
+        if a.get('stepped') is not None:
+            out.append(emit_raw('stepped', 'true' if a['stepped'] else 'false'))
         # What `w` on the list measured about this axis moving with
         # another: not re-derivable from a capture, and cheap to carry.
         if a.get('moves_with'):
@@ -336,7 +397,6 @@ def write_device(dev):
         for k in ('range', 'noise'):
             if a.get(k) is not None:
                 out.append(emit_raw(k, str(a[k])))
-        out.append(emit_str('source', a.get('source', 'unknown')))
         if a.get('note'):
             out.append(emit_str('note', a['note']))
 
@@ -344,12 +404,15 @@ def write_device(dev):
     # Named before anything is emitted, and put back on the device, so
     # the next flow to touch a group sees the ids this write gave them.
     groups = sorted(raw.get('group', []),
-                    key=lambda g: (g['kind'] == 'unknown',
+                    key=lambda g: (g.get('status') == 'uncaptured',
                                    min(all_of(g) or [0])))
     raw['group'] = devicemap.name_ids(groups)
     for g in groups:
         out.append('\n[[group]]')
-        out.append(emit_str('kind', g['kind']))
+        # One or the other: a control has a shape, a row that is not one
+        # has a reason. Nothing has both.
+        out.append(emit_str('status', g['status']) if g.get('status')
+                   else emit_str('kind', g['kind']))
         if g.get('id'):
             out.append(emit_str('id', g['id']))
         if g.get('cumulative'):
@@ -360,14 +423,13 @@ def write_device(dev):
             if g.get(k):
                 out.append(emit_str(k, g[k]))
         for k in ('blind_distinct', 'accident_risk'):
-            if g.get(k):
-                out.append(emit_str(k, g[k]))
+            if g.get(k) is not None:
+                out.append(emit_raw(k, str(g[k])))
         for k in ('hold_ok', 'rapid_ok', 'modifier_ok'):
             if g.get(k) is not None:
                 out.append(emit_raw(k, 'true' if g[k] else 'false'))
         if g.get('note'):
             out.append(emit_str('note', g['note']))
-        out.append(emit_str('source', g.get('source', 'unknown')))
         if g.get('states'):
             out.extend(emit_states(g['states']))
 
@@ -411,8 +473,11 @@ def write_profile(prof):
         walked = said.get('rounds') or []
         if walked:
             out.append(emit_raw('rounds', '[', 4))
-            for lvl, finger in walked:
-                out.append(f'    [{emit_val(lvl)}, {emit_val(finger)}],')
+            for one in walked:
+                bits = [f'level = {emit_val(one["level"])}']
+                if one.get('finger'):
+                    bits.append(f'finger = {emit_val(one["finger"])}')
+                out.append('    { ' + ', '.join(bits) + ' },')
             out.append(']')
         access = {c: spots for c, spots in (said.get('access') or {}).items()
                   if spots}
@@ -439,11 +504,15 @@ def write_profile(prof):
 
 
 def _spot_said(spot):
-    """One way of reaching a control, as an inline table."""
+    """One way of reaching a control, as an inline table.
+
+    No `part`: which piece of the rig your hand is on follows from the
+    device and the level, and a word repeated on forty-four spots is
+    forty-four chances for it to disagree with them.
+    """
     got = spot if isinstance(spot, dict) else {
-        'part': spot.part, 'level': spot.level, 'finger': spot.finger}
-    bits = [f'part = {emit_val(got["part"])}',
-            f'level = {emit_val(got["level"])}']
+        'level': spot.level, 'finger': spot.finger}
+    bits = [f'level = {emit_val(got["level"])}']
     if got.get('finger'):
         bits.append(f'finger = {emit_val(got["finger"])}')
     return '{ ' + ', '.join(bits) + ' }'
@@ -451,10 +520,11 @@ def _spot_said(spot):
 
 def unknown_group(raw):
     """The bucket of not-yet-captured buttons, created if it was emptied."""
-    g = next((x for x in raw['group'] if x['kind'] == 'unknown'), None)
+    g = next((x for x in raw['group']
+              if x.get('status') == 'uncaptured'), None)
     if g is None:
-        g = {'kind': 'unknown', 'states': [], 'label': 'Not yet captured',
-             'source': 'unknown'}
+        g = {'status': 'uncaptured', 'states': [],
+             'label': 'Not yet captured'}
         raw['group'].append(g)
     return g
 
@@ -465,16 +535,17 @@ def reconcile(raw, n_buttons):
     and reading as described."""
     claimed = {}
     for g in raw['group']:
-        if g['kind'] == 'unknown':
+        if g.get('status') == 'uncaptured':
             continue
         for b in all_of(g):
             claimed.setdefault(b, g)
     missing = sorted(set(range(n_buttons)) - set(claimed))
-    u = next((g for g in raw['group'] if g['kind'] == 'unknown'), None)
+    u = next((g for g in raw['group']
+              if g.get('status') == 'uncaptured'), None)
     if missing:
         if u is None:
-            u = {'kind': 'unknown', 'label': 'Not yet captured',
-                 'source': 'unknown', 'states': []}
+            u = {'status': 'uncaptured', 'label': 'Not yet captured',
+                 'states': []}
             raw['group'].append(u)
         set_buttons(u, missing)
     elif u is not None:
@@ -504,8 +575,8 @@ def set_buttons(g, buttons, names=()):
     """
     kept = [st for st in g.get('states') or [] if st.get('role')]
     g['states'] = states_of(
-        g['kind'], buttons, names,
-        directional=g['kind'] not in ('trigger', 'selector')) + kept
+        g.get('kind', ''), buttons, names,
+        directional=g.get('kind') not in ('trigger', 'selector')) + kept
     return g
 
 
@@ -764,7 +835,31 @@ def ask_one(tui, fd, run, ask, head, note='', wanted=None):
     if ask.how == 'sort':
         return press_in_order(tui, fd, run, head, aside)
 
+    if ask.how == 'slot':
+        return pick_slot(tui, run, title, aside, trail)
+
     raise ValueError(f'{ask.id}: no widget draws {ask.how!r}')
+
+
+def pick_slot(tui, run, title, aside, trail):
+    """Where a position that sends nothing sits among the ones that do.
+
+    An index into the press order, or None for `every position sends
+    something`. A number rather than a word, because the only thing
+    anything downstream wants to know is where in the list the gap goes.
+    """
+    places, names, _dirs = places_of(run.given, run.said)
+    said = [names[n] if n < len(names) else f'position {n + 1}'
+            for n in range(len(places))]
+    picks = ['every position sends something']
+    picks += [f'before {said[0]}'] if said else []
+    picks += [f'between {said[n]} and {said[n + 1]}'
+              for n in range(len(said) - 1)]
+    picks += [f'after {said[-1]}'] if said else []
+    got = tui.menu(title, picks, [aside] * len(picks), under=trail, back=True)
+    if got is None or got is ui.BACK:
+        return got
+    return None if got == 0 else got - 1
 
 
 def press_in_order(tui, fd, run, head, aside):
@@ -813,16 +908,18 @@ def forget_round(said, one):
     for ctrl, spots in list(access.items()):
         keep = [sp for sp in spots
                 if not (sp.get('level') == level
-                        and sp.get('finger') == finger)]
+                        and (sp.get('finger') or '') == finger)]
         if len(keep) != len(spots):
             gone = True
             if keep:
                 access[ctrl] = keep
             else:
                 del access[ctrl]
-    walked = said.get('rounds') or []
-    if [level, finger] in walked:
-        walked.remove([level, finger])
+    rounds = said.get('rounds') or []
+    keep = [r for r in rounds
+            if (r['level'], r.get('finger') or '') != (level, finger)]
+    if len(keep) != len(rounds):
+        said['rounds'] = keep
         gone = True
     return gone
 
@@ -883,7 +980,7 @@ def ask_reach(tui, fd, dev, prof):
     if said is None:
         return False
     ask = SHEET.of(questions.DEVICE)[0]
-    levels = SHEET.vocabulary['level']
+    levels = questions.walkable(SHEET)
     note = screens.note_lines(ask)
     moved, at = False, 1
     while True:
@@ -1031,14 +1128,18 @@ def _one_round(tui, fd, dev, prof, said, one):
     for spots in access.values():
         spots[:] = [sp for sp in spots
                     if not (sp.get('level') == one.level['name']
-                            and sp.get('finger') == one.finger)]
+                            and (sp.get('finger') or '') == one.finger)]
     for ctrl in reached_ids(dev, got):
+        # No empty `finger` key: the writer leaves one out, so a spot
+        # written with it differs from its own file for ever -- and the
+        # save screen then had something to say every single time.
         access.setdefault(ctrl, []).append(
-            {'part': _part_of(dev, one.level['name']),
-             'level': one.level['name'], 'finger': one.finger})
-    walked = said.setdefault('rounds', [])
-    if [one.level['name'], one.finger] not in walked:
-        walked.append([one.level['name'], one.finger])
+            {'level': one.level['name']}
+            | ({'finger': one.finger} if one.finger else {}))
+    rounds = said.setdefault('rounds', [])
+    if (one.level['name'], one.finger) not in devicemap.walked(said):
+        rounds.append({'level': one.level['name']}
+                      | ({'finger': one.finger} if one.finger else {}))
     return True
 
 
@@ -1057,16 +1158,17 @@ def _hands_off(tui, dev, said):
     left = [g for g in dev.groups(bindable=True)
             if g.id and not access.get(g.id)]
     for g in left:
-        access[g.id] = [{'part': 'panel', 'level': 'OFF'}]
+        access[g.id] = [{'level': 'OFF'}]
     if not left:
         return False
     tui.popup(
         'Every finger done',
-        [('plain', f'You never pressed {ui.plural(len(left), "control")}'
-                   ' from any grip, so reaching them means taking your'
-                   ' hand off the device. That is now what they say.'),
+        [('plain', f'{ui.plural(len(left), "control")} never came up:'),
          ('plain', '')]
-        + [('meta', f'  {g.label or g.kind}') for g in left])
+        + [('meta', f'  {g.label or g.kind}') for g in left]
+        + [('plain', ''),
+           ('plain', 'Written down as: you take your hand off the device'
+                     ' to reach them.')])
     return True
 
 
@@ -1086,17 +1188,12 @@ def reach_from(dev, pressed):
             g = dev.group_of(b)
             if g is not None and g.id:
                 got.setdefault(g.id, []).append(
-                    {'part': _part_of(dev, level), 'level': level,
-                     'finger': finger})
+                    {'level': level}
+                    | ({'finger': finger} if finger else {}))
     for g in dev.groups(bindable=True):
         if g.id and g.id not in got:
-            got[g.id] = [{'part': 'panel', 'level': 'OFF'}]
+            got[g.id] = [{'level': 'OFF'}]
     return got
-
-
-def _part_of(dev, level):
-    """Which part of the rig a hand is on at this level."""
-    return dev.kind if level in devicemap.GRIPPED else f'{dev.kind}_base'
 
 
 def ask_facts(tui, fd, dev):
@@ -1140,7 +1237,7 @@ def ask_all(tui, fd, dev, ask):
     picks = SHEET.choices(ask)
     moved, at = False, 0
 
-    rows = screens.answer_rows(dev, ask, controls)
+    rows = screens.answer_rows(dev, ask, controls, picks)
 
     def poll():
         nonlocal moved
@@ -1156,19 +1253,19 @@ def ask_all(tui, fd, dev, ask):
                     # list and will go on drawing it until a key comes
                     # back: handing it a new one changes nothing you can
                     # see, so the tick you just earned never appeared.
-                    rows[:] = screens.answer_rows(dev, ask, controls)
+                    rows[:] = screens.answer_rows(dev, ask, controls, picks)
                     return controls.index(g)
         return None
 
     def told():
         said = sum(1 for g in controls if g.told(ask.sets) == 'measured')
-        return f'{said} of {len(controls)} answered'
+        return f'{said}/{len(controls)}'
 
     while True:
-        rows[:] = screens.answer_rows(dev, ask, controls)
+        rows[:] = screens.answer_rows(dev, ask, controls, picks)
         what, at = tui.browse(
-            screens.caption(ask), rows,
-            lambda n: screens.answer_side(dev, ask, controls, n),
+            ask.says, rows,
+            lambda n: screens.answer_side(dev, ask, controls, n, picks),
             keys=('press a control', 'SPACE answers', '↵ done'),
             right=told, index=at, takes=(' ',), poll=poll)
         if what in (None, 'enter'):
@@ -1187,11 +1284,12 @@ def _step(dev, group, ask, picks):
     can never go back to unanswered -- and unanswered is the one state
     nothing else can put back.
     """
-    names = [c['name'] for c in picks] if picks else [True, False]
+    answers = ([questions.stored(c) for c in picks] if picks
+               else [True, False])
     now = group.fact(ask.sets)
-    at = names.index(now) if now in names else -1
+    at = answers.index(now) if now in answers else -1
     _set_fact(dev, group, ask.sets,
-              names[at + 1] if at + 1 < len(names) else None)
+              answers[at + 1] if at + 1 < len(answers) else None)
 
 
 def _set_fact(dev, group, field, value):
@@ -1262,10 +1360,11 @@ def _already(group):
     described trigger and being made to pull it again.
     """
     seen = [st.button for st in group.states if st.button is not None]
-    said = {'buttons': (seen, set()), 'kind': group.kind}
+    said = {'buttons': (seen, set()), 'kind': group.kind,
+            'silent': _silent_at(group)}
     if group.label:
         said['name'] = group.label
-    if group.kind in questions.CLICKS:
+    if group.kind in devicemap.CLICKS:
         # Recorded even when there is none: "it does not click" is an
         # answer, and a control missing it is a control the walk thinks it
         # has not finished asking about.
@@ -1292,10 +1391,52 @@ def _already(group):
     return said
 
 
+def _silent_at(group):
+    """Where the file already says a position sends nothing, or None.
+
+    Read back like every other stored answer. Left out, a switch that had
+    been fully described came back with one question outstanding, so
+    opening it asked about something already on file.
+    """
+    return next((n for n, st in enumerate(group.places)
+                 if not st.emits_signal), None)
+
+
 def _which_way(names):
     """The vocabulary entry whose directions are these, if there is one."""
     return next((c['name'] for c in SHEET.vocabulary.get('axis', ())
                  if list(c.get('dirs') or ()) == list(names)), '')
+
+
+def places_of(given, said):
+    """(places, names, directional) -- where a control can be put.
+
+    One place works this out, because the screen that asks where a silent
+    position sits has to offer exactly the list the writer is about to
+    build, and two copies of that are two copies that drift.
+    """
+    seen, _held = given.get('buttons', ([], set()))
+    # The click is not one of the places you can put the control, and a
+    # dial or a mini-stick has nothing else: collecting picks it up with
+    # the rest, and leaving it here makes it its own position as well.
+    seen = [b for b in seen if b != given.get('click')]
+    places = list(given.get('order') or seen)
+    names = list(said.get('dirs') or [])[:len(places)]
+    directional = bool(names)
+    pull = given.get('pull')
+    if pull:
+        places = list(pull['stages'])
+        names = ['first', 'second', 'third'][:len(places)]
+        directional = False
+    sweep = given.get('sweep')
+    if sweep:
+        places = list(sweep['order'])
+        # A sweep does not name its own positions; a capture already on
+        # file does, and re-reading one must not rename what it found.
+        names = list(sweep.get('names') or [
+            f'position {n + 1}' for n in range(len(places))])
+        directional = False
+    return places, names, directional
 
 
 def build_group(run, keep=None):
@@ -1306,39 +1447,20 @@ def build_group(run, keep=None):
     goes through, so one place knows what a group looks like on disk.
     """
     said = run.given
-    seen, _held = said.get('buttons', ([], set()))
-    # The click is not one of the places you can put the control, and a
-    # dial or a mini-stick has nothing else: collecting picks it up with
-    # the rest, and leaving it here makes it its own position as well.
-    seen = [b for b in seen if b != said.get('click')]
-    entry = {'kind': said['kind'], 'label': said.get('name', ''),
-             'source': 'measured'}
-    places = list(said.get('order') or seen)
-    names = list(run.said.get('dirs') or [])[:len(places)]
-    directional = bool(names)
+    entry = {'kind': said['kind'], 'label': said.get('name', '')}
+    places, names, directional = places_of(said, run.said)
     contacts = []
     if said.get('click') is not None:
         contacts.append(('push', said['click']))
     pull = said.get('pull')
     if pull:
-        places = list(pull['stages'])
-        names = ['first', 'second', 'third'][:len(places)]
-        directional = False
         if pull.get('cumulative'):
             entry['cumulative'] = True
         if pull.get('rest') is not None and said.get('returns') == 'yes':
             contacts.append(('rest', pull['rest']))
         contacts += [('transient', b) for b in pull.get('transient') or []]
-    sweep = said.get('sweep')
-    if sweep:
-        places = list(sweep['order'])
-        # A sweep does not name its own positions; a capture already on
-        # file does, and re-reading one must not rename what it found.
-        names = list(sweep.get('names') or [
-            f'position {n + 1}' for n in range(len(places))])
-        directional = False
     entry['states'] = states_of(entry['kind'], places, names, directional,
-                                contacts)
+                                contacts, said.get('silent'))
     if keep is not None:
         # A control keeps its name through a recapture, because a profile
         # points at it by that name and the buttons are what moved. Its
@@ -1351,17 +1473,18 @@ def build_group(run, keep=None):
     return entry
 
 
-#: What each contact is called where it is not a position of the control.
-CONTACT_SAID = {'push': 'push', 'rest': 'rest', 'travel': 'travel',
-                'transient': 'passing'}
-
-
-def states_of(kind, places, names=(), directional=False, contacts=()):
+def states_of(kind, places, names=(), directional=False, contacts=(),
+              silent_at=None):
     """The positions of a control, as the file has them.
 
     Positions first and in press order, then whatever the control also
     closes: a click, a rest contact, a travel contact, the ones it brushes
     on the way. That order is what a consumer walking the list sees.
+
+    `silent_at` is where a position that sends nothing sits in that order.
+    It has no button, because there is none: the game never hears about
+    it, and a gap in the list is the only way to say the switch has a
+    detent there.
 
     Only what is not the default goes in. A state carrying every field it
     could have is unreadable, and a default written down is a default
@@ -1370,13 +1493,25 @@ def states_of(kind, places, names=(), directional=False, contacts=()):
     latching = kind in devicemap.LATCHING
     out = []
     for n, b in enumerate(places):
+        if n == silent_at:
+            out.append({'emits_signal': False}
+                       | ({'latching': True} if latching else {}))
         name = names[n] if n < len(names) else ''
+        # `direction` is the word for a position that points somewhere and
+        # `name` for one that does not. Writing both put `up` in the file
+        # twice on every hat, and a reader had to know they were the same
+        # word to know they could not disagree.
         out.append({'button': b}
-                   | ({'name': name, 'direction': name} if name and directional
+                   | ({'direction': name} if name and directional
                       else {'name': name} if name else {})
                    | ({'latching': True} if latching else {}))
+    if silent_at is not None and silent_at >= len(places):
+        out.append({'emits_signal': False}
+                   | ({'latching': True} if latching else {}))
     for role, b in contacts:
-        out.append({'name': CONTACT_SAID[role], 'button': b, 'role': role}
+        # No name either: `role` already says what the contact is, and
+        # ROLE_SAID turns it into words wherever one is shown.
+        out.append({'button': b, 'role': role}
                    | ({'latching': True} if role in ('rest', 'travel')
                       else {}))
     return out
@@ -1398,7 +1533,7 @@ def capture_ministick(tui, dev, fd, click=None, first_axis=None,
 
     # slot 0 is the horizontal direction, slot 1 the vertical: a mini-stick is
     # two SEPARATE axes and the map has to know which number is which
-    slots = [None] * n_axes
+    slots: list[int | None] = [None] * n_axes
     if first_axis is not None:
         slots[1 if (first_vertical and n_axes > 1) else 0] = first_axis
     names = ['side to side', 'up and down'] if n_axes > 1 else ['round']
@@ -1407,7 +1542,7 @@ def capture_ministick(tui, dev, fd, click=None, first_axis=None,
         i = slots.index(None)
         other = next((v for v in slots if v is not None), None)
         drain(fd)
-        a, travel = one_axis(tui, fd, head, [
+        got = one_axis(tui, fd, head, [
             f'Turn it {names[i]}.' if n_axes == 1 else
             f'Move it {names[i]} -- this is the'
             f' {"second" if other is not None else "first"} of its two axes.',
@@ -1415,8 +1550,9 @@ def capture_ministick(tui, dev, fd, click=None, first_axis=None,
             if n_axes > 1 else 'Turn it end to end so it can be told apart.',
             f'Already have axis {other} for {names[1 - i]}.'
             if other is not None else ''])
-        if a is None:
+        if got is None:
             return False
+        a = got.index
         if a in slots:
             tui.confirm(head,
                         [f'That is axis {a} again -- the one already recorded'
@@ -1427,12 +1563,17 @@ def capture_ministick(tui, dev, fd, click=None, first_axis=None,
                          ' mini-stick.'], default=True)
             continue
         slots[i] = a
-        if travel:
-            ax = next((x for x in raw.get('axis', []) if x['index'] == a), None)
-            if ax is None:
-                ax = {'index': a}
-                raw.setdefault('axis', []).append(ax)
-            ax['travel'] = travel
+        settle(tui, fd, head, got)
+        ax: dict | None = next(
+            (x for x in raw.get('axis', []) if x['index'] == a), None)
+        if ax is None:
+            ax = {'index': a}
+            raw.setdefault('axis', []).append(ax)
+        _measured(ax, got)
+        # Which of the control's axes this is. Only that: the control
+        # says what the whole thing is and what it is called.
+        if n_axes > 1:
+            ax['role'] = 'x' if i == 0 else 'y'
     axes = slots
 
     label = tui.ask(f'{head} — name it',
@@ -1445,14 +1586,13 @@ def capture_ministick(tui, dev, fd, click=None, first_axis=None,
     # building the shape the reader stopped accepting when the converter
     # went, so a dial made here would not load back.
     entry = {'kind': kind, 'label': label, 'axes': axes,
-             'source': 'measured',
              'states': states_of(kind, [],
                                  contacts=[('push', click)]
                                  if click is not None else [])}
     # replace anything that already claimed these axes or that button -- but
     # never the unknown pool, whose all_of() is every button left to capture
     for g in [g for g in raw['group']
-              if g['kind'] != 'unknown'
+              if not g.get('status')
               and ((click is not None and click in all_of(g))
                    or set(g.get('axes') or []) & set(axes))]:
         raw['group'].remove(g)
@@ -1462,11 +1602,6 @@ def capture_ministick(tui, dev, fd, click=None, first_axis=None,
         set_buttons(u, [b for b in buttons_of(u) if b != click])
         if not buttons_of(u):
             raw['group'].remove(u)
-    for i in axes:
-        ax = next((x for x in raw.get('axis', []) if x['index'] == i), None)
-        if ax is not None and ax.get('source') != 'measured':
-            ax['source'] = 'measured'
-            ax.pop('note', None)
     return True
 
 
@@ -1474,24 +1609,31 @@ def capture_axis(tui, dev, fd, wanted=None):
     raw = dev._raw
     head = f'{dev.product} — axis'
     drain(fd)
-    idx, travel = one_axis(tui, fd, head,
-                           ['Move one axis end to end so it can be told apart.',
-                            'Its resting behaviour is already measured.'],
-                           wanted=wanted)
-    if idx is None:
+    got = one_axis(tui, fd, head,
+                   ['Move one axis end to end so it can be told apart.',
+                    'Its resting behaviour is already measured.'],
+                   wanted=wanted)
+    if got is None:
         return False
-    existing = next((a for a in raw.get('axis', []) if a['index'] == idx), None)
+    settle(tui, fd, head, got)
+    idx = got.index
+    existing: dict | None = next(
+        (a for a in raw.get('axis', []) if a['index'] == idx), None)
+    owner: dict | None = next((g for g in raw.get('group') or []
+                               if idx in (g.get('axes') or [])), None)
     facts = ''
     if existing:
         facts = (f'measured: {existing.get("hid", "?")} / '
                  f'{existing.get("evdev", "?")}, rests '
                  f'{existing.get("rest", "?")}   |   currently: '
-                 f'{existing.get("label", "-")} ({existing.get("source")})')
-    ki = tui.menu(f'{head} {idx} — what is it?', [k[1] for k in AXIS_KINDS],
-                  [k[2] for k in AXIS_KINDS], subtitle=facts)
+                 f'{(owner or {}).get("label", "-")}')
+    kinds = SHEET.vocabulary['axis_kind']
+    ki = tui.menu(f'{head} {idx} — what is it?', [k['says'] for k in kinds],
+                  [list(k.get('hint') or []) for k in kinds], subtitle=facts)
     if ki is None:
         return False
-    if AXIS_KINDS[ki][0] in ('mini-stick-x', 'mini-stick-y'):
+    chosen = kinds[ki]['name']
+    if chosen in ('mini-stick-x', 'mini-stick-y'):
         if tui.confirm(
                 f'{head} {idx} — part of a mini-stick?',
                 ['A mini-stick is two axes and often a click.', '',
@@ -1500,8 +1642,8 @@ def capture_axis(tui, dev, fd, wanted=None):
                  'Answering no just labels this axis on its own.']):
             return capture_ministick(
                 tui, dev, fd, first_axis=idx,
-                first_vertical=AXIS_KINDS[ki][0] == 'mini-stick-y')
-    if AXIS_KINDS[ki][0] == 'dial':
+                first_vertical=chosen == 'mini-stick-y')
+    if chosen == 'dial':
         if tui.confirm(
                 f'{head} {idx} — does it click?',
                 ['A dial often presses in as well.', '',
@@ -1513,31 +1655,45 @@ def capture_axis(tui, dev, fd, wanted=None):
 
     label = tui.ask(f'{head} {idx} — name it',
                      ['What you would call it looking at the device.'],
-                     existing.get('label', '') if existing else '')
+                     (owner or {}).get('label', ''))
     if label is None:
         return False
     if existing is None:
         existing = {'index': idx}
         raw.setdefault('axis', []).append(existing)
-    existing.update({'kind': AXIS_KINDS[ki][0], 'label': label,
-                     'source': 'measured'})
-    if travel:
-        existing['travel'] = travel
+    _measured(existing, got)
     existing.pop('note', None)
+    # What it IS and what it is called go on the control. The axis entry
+    # keeps only what the hardware said about it, so there is one answer
+    # to `what is this` and nowhere for a second one to drift.
+    if owner is None:
+        owner = {'axes': [idx]}
+        raw.setdefault('group', []).append(owner)
+    assert owner is not None
+    owner.update({'kind': chosen, 'label': label})
+    owner.pop('status', None)
     return True
+
+
+def _measured(entry, got):
+    """Put a reading on an axis entry, keeping what it was not asked for.
+
+    Only what came back measured. A skipped settle leaves the noise that
+    was already on file rather than blanking it, because ESC there means
+    `not now`, not `forget what you knew`.
+    """
+    for k in ('stepped', 'range', 'noise'):
+        if getattr(got, k) is not None:
+            entry[k] = getattr(got, k)
 
 
 def reset_grouping(raw, n_buttons):
     """Throw the button grouping away and start over -- what a renumbering
     leaves you with, because the numbers in the file no longer point at the
     same physical controls."""
-    keep = [g for g in raw['group'] if g['kind'] == 'switch-position']
-    raw['group'] = keep + [{'kind': 'unknown', 'label': 'Not yet captured',
-                            'source': 'unknown',
-                            'states': [{'button': b} for b in
-                                       sorted(set(range(n_buttons))
-                                              - {b for g in keep
-                                                 for b in all_of(g)})]}]
+    raw['group'] = [{'status': 'uncaptured', 'label': 'Not yet captured',
+                     'states': [{'button': b}
+                                for b in range(n_buttons)]}]
 
 
 def _read_back(path):
@@ -1595,7 +1751,7 @@ def overview(tui, dev, js, rig, probe=None):
     try:
         while True:
             rows = screens.control_rows(dev)
-            btns, axes = dev.unknown()
+            btns = dev.unknown()
             left = sum(1 for r in rows if r.tone != 'measured')
             got = tui.choose(
                 dev.product, [(r.tone, r.text) for r in rows],
@@ -1603,7 +1759,7 @@ def overview(tui, dev, js, rig, probe=None):
                 keys=screens.sill_keys(), takes=screens.takes(),
                 poll=_watch(dev, fd, rows), corner='pressed',
                 right=f'{len(rows) - left}/{len(rows)} done · '
-                      f'{dev.n_axes - len(axes)}/{dev.n_axes} axes'
+                      f'{len(dev.axes())}/{dev.n_axes} axes'
                       + (' · unsaved' if dirty else ''),
                 tail='? help')
 
@@ -1618,9 +1774,15 @@ def overview(tui, dev, js, rig, probe=None):
                 continue
             if got in ('s', 'S'):
                 if probe:
+                    # Accepting the hardware as it is now, counts and all:
+                    # they used to live in two tables and only one of them
+                    # was refreshed here.
                     dev._raw['fingerprint'] = {
-                        k: probe[k] for k in ('buttons', 'axes', 'axmap', 'hid')
-                        if k in probe}
+                        k: probe[k] for k in ('axmap', 'hid') if k in probe}
+                    for k in ('buttons', 'axes'):
+                        if probe.get(k) is not None:
+                            dev._raw['device'][k] = probe[k]
+                            setattr(dev, 'n_' + k, probe[k])
                 if _save(tui, dev, rig):
                     dirty = False
             elif got in ('r', 'R'):
@@ -1837,7 +1999,7 @@ def _replace(dev, old, entry):
         if g is not entry and (claimed & set(all_of(g))
                                or (entry.get('id')
                                    and g.get('id') == entry.get('id'))):
-            if g['kind'] == 'unknown':
+            if g.get('status') == 'uncaptured':
                 set_buttons(g, [b for b in buttons_of(g) if b not in claimed])
             else:
                 raw['group'].remove(g)
@@ -1859,17 +2021,17 @@ def _mark_unwired(tui, dev, btns):
                        default=False):
         return False
     dev._raw['group'].append(
-        {'kind': 'unwired', 'source': 'measured',
-         'states': states_of('unwired', list(btns)),
+        {'status': 'unwired',
+         'states': states_of('', list(btns)),
          'label': 'Reported by the firmware, nothing attached'})
     return True
 
 
 #: What one device can be to a rig. `role` is what it is FOR on this desk,
 #: which is not always what it is: a second throttle can be the collective.
-ROLES_ON_A_DESK = ('stick', 'throttle', 'pedals', 'panel', 'collective')
+ROLES_ON_A_DESK = devicemap.ROLES_ON_A_DESK
 
-HANDS = ('left', 'right')
+HANDS = devicemap.HANDS
 
 
 def edit_rig(tui, prof):
@@ -2164,10 +2326,10 @@ def main():
             js, dev = m.js, m.device
             if not m.ok:
                 print(f'   [{m.status}] {m.explain()}')
-            btns, axes = dev.unknown()
+            btns = dev.unknown()
             print(f'{js}  {dev.product}')
             print(f'    {dev.n_buttons - len(btns)}/{dev.n_buttons} buttons '
-                  f'described, {dev.n_axes - len(axes)}/{dev.n_axes} axes')
+                  f'described, {len(dev.axes())}/{dev.n_axes} axes')
             for g in dev.groups(bindable=True):
                 d = (f'  [{", ".join(g.dirs or g.stages)}]'
                      if (g.dirs or g.stages) else '')

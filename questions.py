@@ -41,7 +41,7 @@ CONTROL, DEVICE, ALL = 'control', 'device', 'all'
 #: reach `ask_one`, which raises -- in the middle of a capture, with
 #: curses up, after you had answered everything before it.
 WIDGETS = ('collect', 'pick', 'tick', 'name', 'press', 'watch', 'sort',
-           'slot', 'rounds')
+           'slot', 'sweep', 'rounds')
 
 #: What a vocabulary entry may say. Closed for the same reason `[[ask]]`
 #: is: a dataclass refuses `notee` outright, and a plain dict took `hnit`
@@ -53,12 +53,19 @@ WIDGETS = ('collect', 'pick', 'tick', 'name', 'press', 'watch', 'sort',
 #:   dirs        the positions it brings with it (a hat knows its own)
 #:   asks_way    it points somewhere and the shape does not say where
 #:   walked      false for a level that is not a round you walk
-ENTRY_KEYS = ('name', 'value', 'says', 'hint', 'dirs', 'asks_way', 'walked')
+#:   makes       the control an axis menu entry produces, where that is
+#:               not the entry itself: `stick-x` makes a `stick`
+#:   role        which axis of that control it is -- x or y
+#:   axes        what each axis of the shape is called, in role order.
+#:               How many there are is how long it is, the way `dirs`
+#:               says how many positions a hat has.
+ENTRY_KEYS = ('name', 'value', 'says', 'hint', 'dirs', 'asks_way',
+              'walked', 'makes', 'role', 'axes')
 
 #: Keys a vocabulary entry carries into the answers beside its own name.
 #: Picking `hat4` says the control has four positions AND what they are
 #: called, and the second half is what the next question needs.
-CARRIES = ('dirs', 'asks_way')
+CARRIES = ('dirs', 'asks_way', 'axes')
 
 
 @dataclass
@@ -184,12 +191,34 @@ def check(sheet):
     said = tuple(c['name'] for c in sheet.vocabulary.get('level', ()))
     if said != devicemap.LEVELS:
         raise ValueError(f'level: {said} is not {devicemap.LEVELS}')
-    for voc, closed in (('kind', devicemap.SHAPES),
-                        ('axis_kind', devicemap.AXIS_KINDS)):
-        offered = {c['name'] for c in sheet.vocabulary.get(voc, ())}
-        if offered - set(closed):
-            raise ValueError(f'{voc}: offers {sorted(offered - set(closed))},'
-                             ' which devicemap will not accept')
+    # Every kind a control may be, not only the ones with buttons: the
+    # walk describes an axis control too, and a menu that cannot say
+    # `lever` is a control you can open and not describe.
+    offered = {c['name'] for c in sheet.vocabulary.get('kind', ())}
+    if offered - set(devicemap.KINDS):
+        raise ValueError(f'kind: offers {sorted(offered - set(devicemap.KINDS))},'
+                         ' which devicemap will not accept')
+    for c in sheet.vocabulary.get('kind', ()):
+        if len(c.get('axes') or []) > len(devicemap.AXIS_ROLES):
+            raise ValueError(f'kind: {c["name"]!r} has'
+                             f' {len(c["axes"])} axes, and there are only'
+                             f' {len(devicemap.AXIS_ROLES)} ways to say'
+                             ' which is which')
+    # An axis menu entry is a way of saying what you just moved, and what
+    # it MAKES is the control. They are not the same: `stick-x` is one
+    # axis of a `stick`, the way `up` is one direction of a `hat4`.
+    for c in sheet.vocabulary.get('axis_kind', ()):
+        makes = c.get('makes', c['name'])
+        if makes not in devicemap.KINDS:
+            raise ValueError(f'axis_kind: {c["name"]!r} makes {makes!r},'
+                             ' which is not a kind')
+        if ('makes' in c) != ('role' in c):
+            raise ValueError(f'axis_kind: {c["name"]!r} says which control'
+                             ' it makes or which axis of it it is, never'
+                             ' one without the other')
+        if 'role' in c and c['role'] not in devicemap.AXIS_ROLES:
+            raise ValueError(f'axis_kind: {c["name"]!r} role = {c["role"]!r};'
+                             f' one of {", ".join(devicemap.AXIS_ROLES)}')
     for name, entries in sheet.vocabulary.items():
         for c in entries:
             odd = sorted(set(c) - set(ENTRY_KEYS))
@@ -227,6 +256,9 @@ ONLY = {
     # rule that asked, and `settle` threw the answer away again.
     'asks_which_way': lambda said: bool(said.get('asks_way')),
     'has_directions': lambda said: len(said.get('dirs') or ()) > 1,
+    # The shape says how many axes it has and what each is called, so a
+    # control that owns any is one the walk has to ask about.
+    'owns_axes': lambda said: bool(said.get('axes')),
     'found_rest_contact': lambda said: (said.get('pull')
                                         or {}).get('rest') is not None,
     # Only something that STAYS where you put it can have a place the game
@@ -238,12 +270,15 @@ ONLY = {
 def answered(ask, got):
     """Whether what a screen came back with counts as an answer.
 
-    RETURN with nothing pressed is not one. Taken as one it says the
-    control has no buttons, and a control with no buttons is a row in the
-    list with no name and no way ever to give it one.
-
     `skip` marks the questions where nothing IS the answer -- a control
-    that does not click has to be able to say so.
+    that does not click has to be able to say so, and so does a stick,
+    which is three axes and not one button.
+
+    Nothing pressed used to be refused here, to stop a control with no
+    buttons reaching the list as a row with no name and no way to give
+    it one. That guard now sits where it belongs: `_replace` refuses an
+    entry that owns neither a button nor an axis, which is the thing
+    that was actually wrong with it.
     """
     if got is None:
         return bool(ask.skip)

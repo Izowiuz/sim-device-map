@@ -245,18 +245,26 @@ class Shape:
 #: questions a capture asks and which needs a consumer will let it answer:
 #: a word outside this list matches nothing, quietly, for ever.
 SHAPES = ('button', 'paddle', 'hat2', 'hat4', 'hat8', 'trigger', 'switch2',
-          'switch3', 'latch', 'selector', 'encoder', 'dial', 'ministick')
+          'switch3', 'latch', 'selector', 'encoder', 'dial', 'ministick',
+          'stick')
 
-#: What an axis is. A control that is nothing but an axis takes its shape
-#: from here, so the two lists together are what a `kind` may say.
-AXIS_KINDS = ('stick-x', 'stick-y', 'twist', 'mini-stick-x', 'mini-stick-y',
-              'lever', 'slider', 'dial', 'pedal', 'wheel', 'axis')
+#: Shapes that are one axis and nothing else. A control that is only an
+#: axis takes its kind from here, so the two lists together are what a
+#: `kind` may say.
+#:
+#: `stick-x` and `stick-y` are NOT here and never were kinds: a stick is
+#: one piece of plastic you move two ways, as a hat is one piece you push
+#: four ways, and `(stick, x)` names one axis of it the way `(hat4, up)`
+#: names one direction. Said as a kind per axis, the word carried the
+#: control's kind and the axis's part in it at once, and so said the
+#: first of them twice.
+AXIS_SHAPES = ('lever', 'slider', 'pedal', 'wheel', 'axis')
 
-KINDS = SHAPES + tuple(k for k in AXIS_KINDS if k not in SHAPES)
+KINDS = SHAPES + tuple(k for k in AXIS_SHAPES if k not in SHAPES)
 
-#: Which axis of its control an axis is. A mini-stick is one control and
-#: two of these; a lever is one control and neither.
-AXIS_ROLES = ('x', 'y')
+#: Which axis of its control an axis is. A stick is one control and three
+#: of these -- roll, pitch and twist -- a mini-stick two, a lever none.
+AXIS_ROLES = ('x', 'y', 'z')
 
 #: Where an axis sits when nothing is touching it.
 RESTS = ('centred', 'min', 'max', 'mid')
@@ -722,6 +730,19 @@ class Device:
 
     def group_of(self, button):
         return next((g for g in self._groups if button in g.all_buttons), None)
+
+    def axis_of(self, kind, role=''):
+        """The axis of a control of this kind, by which axis of it it is.
+
+        How you name one axis of a control that has more than one, the
+        way `(hat4, up)` names one direction of a hat. There used to be a
+        kind per axis -- `mini-stick-x` -- which said the control's kind
+        and the axis's part in it in one word, and so said the first of
+        them twice.
+        """
+        return next((a for a in self._axes
+                     if self.axis_kind(a.index) == kind
+                     and (a.role == role or not role)), None)
 
     def axis_kind(self, index):
         """What the control owning this axis is. An axis is not a kind of

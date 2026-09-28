@@ -250,3 +250,42 @@ class WhatAnAxisIsGoodFor(unittest.TestCase):
     def test_a_still_axis_is_measured_not_missing(self):
         # 0 is the best noise there is, and the one a truth test drops.
         self.assertEqual(0, devicemap.Axis(index=0, noise=0).noise)
+
+
+class OnePieceOfPlasticIsOneControl(unittest.TestCase):
+    """A hat is one control you push four ways, not four controls. A
+    stick is one control you move two ways, and it was two -- so two
+    controls under one hand read as a pair that could be worked at once
+    with different fingers, which is one stick and one hand."""
+
+    def test_the_stick_is_one_control_with_all_its_axes(self):
+        # Roll, pitch and twist: one piece of plastic you move three
+        # ways, as a hat is one you push four ways.
+        dev = next(d for d in devicemap.load_all(bare=True)
+                   if d.kind == 'stick')
+        got = [g for g in dev.groups('stick')]
+        self.assertEqual(1, len(got))
+        self.assertEqual(3, len(got[0].axes))
+
+    def test_every_axis_of_it_says_which_one_it_is(self):
+        dev = next(d for d in devicemap.load_all(bare=True)
+                   if d.kind == 'stick')
+        big = dev.groups('stick')[0]
+        self.assertEqual(['x', 'y', 'z'],
+                         [dev.axis(n).role for n in big.axes])
+        for role in ('x', 'y', 'z'):
+            with self.subTest(role=role):
+                self.assertIsNotNone(dev.axis_of('stick', role))
+
+    def test_no_kind_names_one_axis_of_another_control(self):
+        # `stick-x` and `twist` each said a control's kind and which axis
+        # of it in one word, so each said the first of them twice -- and
+        # made one piece of plastic into two controls to say it about.
+        # Not a test about spelling: `twist` carries no `-x` and was the
+        # same mistake.
+        import questions as q
+        parts = {c['name'] for c in q.read().vocabulary['axis_kind']
+                 if c.get('role')}
+        self.assertTrue(parts)
+        self.assertFalse(parts & set(devicemap.KINDS),
+                         sorted(parts & set(devicemap.KINDS)))

@@ -110,15 +110,13 @@ analogue-brake-lever-on-the-grip = [
 bottom-thumb-hat                 = [{ level = "HOME", finger = "thumb" }]
 grip-pinky-button                = [{ level = "EXTENDED", finger = "ring" }]
 grip-thumb-hat                   = [{ level = "HOME", finger = "thumb" }]
-main-stick-fore-aft              = [{ level = "HOME" }]
-main-stick-left-right            = [{ level = "HOME" }]
+main-stick                       = [{ level = "HOME" }]
 main-trigger                     = [{ level = "HOME", finger = "index" }]
 mini-stick                       = [
     { level = "HOME", finger = "index" },
     { level = "HOME", finger = "thumb" },
 ]
 stick-encoder-and-click          = [{ level = "HOME", finger = "thumb" }]
-stick-twist                      = [{ level = "HOME" }]
 thumb-bottom-button              = [{ level = "HOME", finger = "thumb" }]
 thumb-top-button                 = [{ level = "HOME", finger = "thumb" }]
 top-thumb-hat                    = [{ level = "HOME", finger = "thumb" }]

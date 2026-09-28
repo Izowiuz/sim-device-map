@@ -50,6 +50,7 @@ index  = 0
 evdev  = "ABS_X"
 hid    = "X"
 rest   = "centred"
+role   = "x"
 stepped = false
 range  = 65534
 noise  = 0
@@ -59,6 +60,10 @@ index  = 1
 evdev  = "ABS_Y"
 hid    = "Y"
 rest   = "centred"
+role   = "y"
+stepped = false
+range  = 65534
+noise  = 0
 note   = "Wants inverting in every sim: stick back = nose up."
 
 [[axis]]
@@ -66,7 +71,10 @@ index  = 2
 evdev  = "ABS_Z"
 hid    = "Z"
 rest   = "centred"
+role   = "z"
 stepped = false
+range  = 65534
+noise  = 0
 
 [[axis]]
 index  = 3
@@ -74,6 +82,9 @@ evdev  = "ABS_RX"
 hid    = "Rx"
 rest   = "centred"
 role   = "x"
+stepped = false
+range  = 65534
+noise  = 0
 
 [[axis]]
 index  = 4
@@ -82,12 +93,17 @@ hid    = "Ry"
 rest   = "centred"
 role   = "y"
 stepped = false
+range  = 65534
+noise  = 0
 
 [[axis]]
 index  = 5
 evdev  = "ABS_THROTTLE"
 hid    = "Slider"
 rest   = "min"
+stepped = false
+range  = 65534
+noise  = 0
 
 # ------------------------------------------------------------------ buttons
 
@@ -106,32 +122,10 @@ states = [
 ]
 
 [[group]]
-kind   = "stick-x"
-id     = "main-stick-left-right"
-axes   = [0]
-label  = "Main stick, left/right"
-blind_distinct = 2
-accident_risk = 0
-hold_ok = true
-rapid_ok = true
-modifier_ok = false
-
-[[group]]
-kind   = "stick-y"
-id     = "main-stick-fore-aft"
-axes   = [1]
-label  = "Main stick, fore/aft"
-blind_distinct = 2
-accident_risk = 0
-hold_ok = true
-rapid_ok = true
-modifier_ok = false
-
-[[group]]
-kind   = "twist"
-id     = "stick-twist"
-axes   = [2]
-label  = "Stick twist"
+kind   = "stick"
+id     = "main-stick"
+axes   = [0, 1, 2]
+label  = "Main stick"
 blind_distinct = 2
 accident_risk = 0
 hold_ok = true

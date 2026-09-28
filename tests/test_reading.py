@@ -380,3 +380,36 @@ class TheFingerprintIsTwoReadingsNotOne(unittest.TestCase):
                 # neither reading gives.
                 for v in fp.values():
                     self.assertFalse(any(isinstance(x, dict) for x in v))
+
+
+class NamingOneAxisOfAControl(unittest.TestCase):
+    """A hat is one control and `(hat4, up)` names one direction of it.
+    An axis is named the same way: the control's kind, and which axis of
+    it. `mini-stick-x` said both in one word, and so said the control's
+    kind twice."""
+
+    def dev(self):
+        return fake.device(kind='stick', axes=[
+            fake.axis(0, role='x'), fake.axis(1, role='y'), fake.axis(2)],
+            groups=[fake.group('ministick', [], label='Mini', id='mini',
+                               axes=[0, 1]),
+                    fake.group('lever', [], label='Brake', id='brake',
+                               axes=[2])])
+
+    def at(self, *a):
+        got = self.dev().axis_of(*a)
+        assert got is not None
+        return got.index
+
+    def test_it_finds_the_axis_you_name(self):
+        self.assertEqual(0, self.at('ministick', 'x'))
+        self.assertEqual(1, self.at('ministick', 'y'))
+
+    def test_a_control_with_one_axis_needs_no_role(self):
+        self.assertEqual(2, self.at('lever'))
+
+    def test_a_kind_nothing_has_is_nothing(self):
+        self.assertIsNone(self.dev().axis_of('pedal'))
+
+    def test_and_a_role_that_control_does_not_have(self):
+        self.assertIsNone(self.dev().axis_of('lever', 'y'))

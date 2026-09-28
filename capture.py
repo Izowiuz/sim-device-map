@@ -794,7 +794,7 @@ def observe_trigger(tui, fd, title):
             return got
 
 
-def ask_one(tui, fd, run, ask, head, note='', wanted=None):
+def ask_one(tui, fd, dev, run, ask, head, note='', wanted=None):
     """One question on the screen. The answer, `ui.BACK`, or None to give up.
 
     Every branch here is a widget; which one is `ask.how`, out of the
@@ -843,7 +843,73 @@ def ask_one(tui, fd, run, ask, head, note='', wanted=None):
     if ask.how == 'slot':
         return pick_slot(tui, run, title, aside, trail)
 
+    if ask.how == 'sweep':
+        return sweep_axes(tui, fd, dev, run, head, aside)
+
     raise ValueError(f'{ask.id}: no widget draws {ask.how!r}')
+
+
+def _measured(entry, got):
+    """Put a reading on an axis entry, keeping what it was not asked for.
+
+    Only what came back measured. A skipped settle leaves the noise that
+    was already on file rather than blanking it, because ESC there means
+    `not now`, not `forget what you knew`.
+    """
+    for k in ('stepped', 'range', 'noise'):
+        if getattr(got, k) is not None:
+            entry[k] = getattr(got, k)
+
+
+def sweep_axes(tui, fd, dev, run, head, aside):
+    """Every axis the shape has, one at a time. Their indices.
+
+    The reading goes straight onto the `[[axis]]` entry, because that is
+    where a measurement belongs; what comes back is only which axis is
+    which, which is what the control keeps.
+
+    A shape that usually has three does not have to. Backing out of one
+    asks whether it is missing or you are leaving, so a stick with no
+    twist is recordable and is still a stick.
+    """
+    names = list(run.said.get('axes') or [])
+    got: list[int] = []
+    for n, said in enumerate(names):
+        drain(fd)
+        one = one_axis(tui, fd, head, [f'Move it: {said}.'] + aside)
+        if one is None:
+            if got and tui.confirm(
+                    f'{head} — no {said}?',
+                    [f'This one has no {said}.', '',
+                     'Record it with the axes you have given?'],
+                    ['Hardware varies: a control with fewer axes than the'
+                     ' shape usually has is not a broken capture.'],
+                    default=False):
+                break
+            return None
+        if one.index in got:
+            tui.confirm(head,
+                        [f'That is axis {one.index} again -- the one already'
+                         f' recorded for {names[got.index(one.index)]}.', '',
+                         f'Move it {said} instead.'],
+                        ['Each of them has to be its own axis.'], default=True)
+            return ui.BACK
+        settle(tui, fd, head, one)
+        entry: dict | None = next(
+            (a for a in dev._raw.get('axis') or []
+             if a['index'] == one.index), None)
+        if entry is None:
+            entry = {'index': one.index}
+            dev._raw.setdefault('axis', []).append(entry)
+        _measured(entry, one)
+        # Which of the control's axes this is. Only where the shape has
+        # more than one: a lever's single axis is not `the x one`.
+        if len(names) > 1:
+            entry['role'] = devicemap.AXIS_ROLES[n]
+        else:
+            entry.pop('role', None)
+        got.append(one.index)
+    return got or None
 
 
 def pick_slot(tui, run, title, aside, trail):
@@ -1305,16 +1371,6 @@ def _set_fact(dev, group, field, value):
     setattr(group, field, value)
 
 
-def _is_an_axis(group):
-    """Whether this control is one the axis flow describes.
-
-    The shapes the control walk offers are `devicemap.SHAPES`. A control
-    of any other kind -- a lever, a twist, a bare axis -- cannot be
-    described there, because the menu has no word for what it is.
-    """
-    return bool(group.axes) and group.kind not in devicemap.SHAPES
-
-
 def walk_control(tui, fd, dev, group=None, wanted=None):
     """Ask about one control, from nothing or from what it already says.
 
@@ -1336,7 +1392,7 @@ def walk_control(tui, fd, dev, group=None, wanted=None):
         ask = run.by_id[at] if at else run.next()
         if ask is None:
             return run
-        got = ask_one(tui, fd, run, ask, head, note, wanted)
+        got = ask_one(tui, fd, dev, run, ask, head, note, wanted)
         note = ''
         if got is None:
             return None
@@ -1374,9 +1430,15 @@ def _already(group):
     way past -- so reading them back is the difference between opening a
     described trigger and being made to pull it again.
     """
-    seen = [st.button for st in group.states if st.button is not None]
+    # Positions and the click, which are what the walk asks about. Every
+    # button used to go in, so a lever's travel contact came back as a
+    # place you can put it.
+    seen = list(group.buttons) + ([group.push] if group.push is not None
+                                  else [])
     said = {'buttons': (seen, set()), 'kind': group.kind,
             'silent': _silent_at(group)}
+    if group.axes:
+        said['which_axes'] = list(group.axes)
     if group.label:
         said['name'] = group.label
     if group.kind in devicemap.CLICKS:
@@ -1476,6 +1538,8 @@ def build_group(run, keep=None):
         contacts += [('transient', b) for b in pull.get('transient') or []]
     entry['states'] = states_of(entry['kind'], places, names, directional,
                                 contacts, said.get('silent'))
+    if said.get('which_axes'):
+        entry['axes'] = list(said['which_axes'])
     if keep is not None:
         # A control keeps its name through a recapture, because a profile
         # points at it by that name and the buttons are what moved. Its
@@ -1483,8 +1547,19 @@ def build_group(run, keep=None):
         # them, so nothing here may drop them.
         if keep.id:
             entry['id'] = keep.id
-        if keep.axes:
+        if keep.axes and not entry.get('axes'):
             entry['axes'] = list(keep.axes)
+        # Contacts nothing in the walk asks about -- a lever's travel
+        # switch, a rest contact on something that is not a trigger --
+        # stay. A walk that never asked about them cannot have changed
+        # them, and dropping them loses a button the file had.
+        if not said.get('pull'):
+            entry['states'] = entry['states'] + [
+                {'button': st.button, 'role': st.role}
+                | ({'latching': True} if st.latching else {})
+                for st in keep.states
+                if st.role in ('rest', 'travel', 'transient')
+                and st.button is not None]
     return entry
 
 
@@ -1532,185 +1607,71 @@ def states_of(kind, places, names=(), directional=False, contacts=(),
     return out
 
 
-def capture_ministick(tui, dev, fd, click=None, first_axis=None,
-                      first_vertical=False, kind='ministick', n_axes=2):
-    """Anything that owns axes and often a click: a mini-stick is two axes, a
-    dial is one. Reachable from either side -- press it and pick the shape, or
-    move it and say yes."""
-    raw = dev._raw
-    head = f'{dev.product} — {"dial" if kind == "dial" else "mini-stick"}'
+def axes_of_kind(kind):
+    """[(role, what to call it)] -- the axes a control of this kind has.
 
-    if click is None:
-        drain(fd)
-        click = one_button(tui, fd, head, 'does it click? press it in',
-                           ['A wheel or stick that presses in reports one more',
-                            'button. RETURN skips if this one does not click.'])
-
-    # slot 0 is the horizontal direction, slot 1 the vertical: a mini-stick is
-    # two SEPARATE axes and the map has to know which number is which
-    slots: list[int | None] = [None] * n_axes
-    if first_axis is not None:
-        slots[1 if (first_vertical and n_axes > 1) else 0] = first_axis
-    names = ['side to side', 'up and down'] if n_axes > 1 else ['round']
-
-    while None in slots:
-        i = slots.index(None)
-        other = next((v for v in slots if v is not None), None)
-        drain(fd)
-        got = one_axis(tui, fd, head, [
-            f'Turn it {names[i]}.' if n_axes == 1 else
-            f'Move it {names[i]} -- this is the'
-            f' {"second" if other is not None else "first"} of its two axes.',
-            'Each direction is its own axis with its own number.'
-            if n_axes > 1 else 'Turn it end to end so it can be told apart.',
-            f'Already have axis {other} for {names[1 - i]}.'
-            if other is not None else ''])
-        if got is None:
-            return False
-        a = got.index
-        if a in slots:
-            tui.confirm(head,
-                        [f'That is axis {a} again -- the one already recorded'
-                         f' for {names[1 - i]}.', '',
-                         f'Move it {names[i]} instead.'],
-                        ['The two directions have to be two different axes.',
-                         'If it only ever moves one axis, it is not a'
-                         ' mini-stick.'], default=True)
-            continue
-        slots[i] = a
-        settle(tui, fd, head, got)
-        ax: dict | None = next(
-            (x for x in raw.get('axis', []) if x['index'] == a), None)
-        if ax is None:
-            ax = {'index': a}
-            raw.setdefault('axis', []).append(ax)
-        _measured(ax, got)
-        # Which of the control's axes this is. Only that: the control
-        # says what the whole thing is and what it is called.
-        if n_axes > 1:
-            ax['role'] = 'x' if i == 0 else 'y'
-    axes = slots
-
-    label = tui.ask(f'{head} — name it',
-                     ['What you would call it looking at the device.'],
-                     'Dial' if kind == 'dial' else 'Mini-stick')
-    if label is None:
-        return False
-
-    # `states` and not `buttons`: this flow was the last one still
-    # building the shape the reader stopped accepting when the converter
-    # went, so a dial made here would not load back.
-    entry = {'kind': kind, 'label': label, 'axes': axes,
-             'states': states_of(kind, [],
-                                 contacts=[('push', click)]
-                                 if click is not None else [])}
-    # replace anything that already claimed these axes or that button -- but
-    # never the unknown pool, whose all_of() is every button left to capture
-    for g in [g for g in raw['group']
-              if not g.get('status')
-              and ((click is not None and click in all_of(g))
-                   or set(g.get('axes') or []) & set(axes))]:
-        raw['group'].remove(g)
-    raw['group'].append(entry)
-    if click is not None:
-        u = unknown_group(raw)
-        set_buttons(u, [b for b in buttons_of(u) if b != click])
-        if not buttons_of(u):
-            raw['group'].remove(u)
-    return True
+    Out of the descriptor, in role order. A count in a signature and a
+    pair of words in a list could say `two` and nothing else; a stick has
+    three and a dial one, and both are said in the same place as what
+    each of them is called.
+    """
+    got = [(c.get('role', ''), c['says'])
+           for c in SHEET.vocabulary.get('axis_kind', ())
+           if c.get('makes', c['name']) == kind]
+    return sorted(got, key=lambda r: (devicemap.AXIS_ROLES.index(r[0])
+                                      if r[0] else -1))
 
 
-def capture_axis(tui, dev, fd, wanted=None):
-    raw = dev._raw
-    # Headed by what you opened, when you opened one: `— axis` says the
-    # same thing as the screen it came from and nothing about which.
-    opened = dev.axis_group(wanted) if wanted is not None else None
-    called = (opened.label or opened.kind) if opened else ''
-    head = f'{dev.product} — {called or "axis"}'
+def _slot_of(ways, role):
+    """Where an axis of this role sits among the ones its control has."""
+    return next((n for n, (r, _s) in enumerate(ways) if r == role), 0)
+
+
+def _kind_said(kind):
+    """What a shape is called on a screen, out of the descriptor.
+
+    Either vocabulary: a control's shape and what a lone axis makes are
+    two lists and a kind may be in either.
+    """
+    for voc in ('kind', 'axis_kind'):
+        for c in SHEET.vocabulary.get(voc, ()):
+            if c.get('makes', c['name']) == kind:
+                return c['says'].split(' (')[0].split(',')[0]
+    return kind
+
+
+def capture_axis(tui, dev, fd, rig=None, wanted=None):
+    """Which control an axis belongs to, then describe that control.
+
+    Moving one is how you point at it: an axis number tells you nothing
+    about which piece of plastic it is, and the list has a row per
+    control rather than per axis.
+
+    What it IS, how many axes it has and what each of them is called are
+    asked by the walk, which is the same walk every other control goes
+    through. There used to be a second, hand-written flow here with its
+    own kind menu, its own count of axes and its own words -- and it
+    could not offer the step-by-step editing the walk has.
+    """
     drain(fd)
-    got = one_axis(tui, fd, head,
-                   ['Move one axis end to end so it can be told apart.',
-                    'Its resting behaviour is already measured.'],
-                   wanted=wanted, called=called)
+    got = one_axis(tui, fd, f'{dev.product} — which axis?',
+                   ['Move one axis so it can be told apart.',
+                    'What it is gets asked next.'], wanted=wanted)
     if got is None:
         return False
-    settle(tui, fd, head, got)
-    idx = got.index
-    existing: dict | None = next(
-        (a for a in raw.get('axis', []) if a['index'] == idx), None)
-    owner: dict | None = next((g for g in raw.get('group') or []
-                               if idx in (g.get('axes') or [])), None)
-    # What the hardware said about it, and nothing else: what it is
-    # called is in the title, and repeated here it wrapped the subtitle
-    # onto a second line and pushed two of the ten kinds off a short
-    # screen.
-    facts = ''
-    if existing:
-        facts = (f'{existing.get("hid", "?")} / {existing.get("evdev", "?")},'
-                 f' rests {existing.get("rest", "?")}')
-    kinds = SHEET.vocabulary['axis_kind']
-    # On what it already is, not on the first of ten. Opened on the wrong
-    # one, RETURN quietly changed a twist into the main stick's roll.
-    now = (owner or {}).get('kind', '')
-    at = next((n for n, k in enumerate(kinds) if k['name'] == now), 0)
-    ki = tui.menu(f'axis {idx} — what is it?', [k['says'] for k in kinds],
-                  [list(k.get('hint') or []) for k in kinds],
-                  subtitle=facts, index=at)
-    if ki is None:
-        return False
-    chosen = kinds[ki]['name']
-    if chosen in ('mini-stick-x', 'mini-stick-y'):
-        if tui.confirm(
-                f'{head} {idx} — part of a mini-stick?',
-                ['A mini-stick is two axes and often a click.', '',
-                 'Record it as one control rather than a lone axis?'],
-                ['You will be asked for the click and the other axis.',
-                 'Answering no just labels this axis on its own.']):
-            return capture_ministick(
-                tui, dev, fd, first_axis=idx,
-                first_vertical=chosen == 'mini-stick-y')
-    if chosen == 'dial':
-        if tui.confirm(
-                f'{head} {idx} — does it click?',
-                ['A dial often presses in as well.', '',
-                 'Record it as one control rather than a lone axis?'],
-                ['You will be asked for the click.',
-                 'Answering no just labels this axis on its own.']):
-            return capture_ministick(tui, dev, fd, kind='dial', n_axes=1,
-                                     first_axis=idx)
+    return _describe(tui, fd, dev, rig, dev.axis_group(got.index))
 
-    label = tui.ask(f'{head} {idx} — name it',
-                     ['What you would call it looking at the device.'],
-                     (owner or {}).get('label', ''))
-    if label is None:
+
+def _describe(tui, fd, dev, rig, old, button=None):
+    """Walk the recipe for one control and write what it says. True if
+    the file changed."""
+    run = walk_control(tui, fd, dev, old, button)
+    if run is None or not run.done:
         return False
-    if existing is None:
-        existing = {'index': idx}
-        raw.setdefault('axis', []).append(existing)
-    _measured(existing, got)
-    existing.pop('note', None)
-    # What it IS and what it is called go on the control. The axis entry
-    # keeps only what the hardware said about it, so there is one answer
-    # to `what is this` and nowhere for a second one to drift.
-    if owner is None:
-        owner = {'axes': [idx]}
-        raw.setdefault('group', []).append(owner)
-    assert owner is not None
-    owner.update({'kind': chosen, 'label': label})
-    owner.pop('status', None)
+    if not _replace(dev, old, build_group(run, old)):
+        return False
+    _reload(dev, rig)
     return True
-
-
-def _measured(entry, got):
-    """Put a reading on an axis entry, keeping what it was not asked for.
-
-    Only what came back measured. A skipped settle leaves the noise that
-    was already on file rather than blanking it, because ESC there means
-    `not now`, not `forget what you knew`.
-    """
-    for k in ('stepped', 'range', 'noise'):
-        if getattr(got, k) is not None:
-            entry[k] = getattr(got, k)
 
 
 def reset_grouping(raw, n_buttons):
@@ -1818,8 +1779,7 @@ def overview(tui, dev, js, rig, probe=None):
             elif got in ('f', 'F'):
                 dirty = ask_facts(tui, fd, dev) or dirty
             elif got in ('a', 'A'):
-                dirty = capture_axis(tui, dev, fd) or dirty
-                _reload(dev, rig)
+                dirty = capture_axis(tui, dev, fd, rig) or dirty
             elif got in ('u', 'U'):
                 dirty = _mark_unwired(tui, dev, btns) or dirty
                 _reload(dev, rig)
@@ -1829,26 +1789,9 @@ def overview(tui, dev, js, rig, probe=None):
                 old = row.group if row is not None else None
                 if old is not None and not old.bindable:
                     continue
-                # An axis is described by the axis flow, which is the one
-                # that knows the axis vocabulary and does the measuring.
-                # The control walk opens by asking you to press every
-                # part of it, and an axis has no parts to press; its own
-                # shape is not in the menu it then offers, so answering
-                # replaced `stick-x` with whichever button-shape you
-                # picked.
-                if old is not None and _is_an_axis(old):
-                    dirty = capture_axis(tui, dev, fd,
-                                         wanted=old.axes[0]) or dirty
-                    _reload(dev, rig)
-                    continue
-                run = walk_control(tui, fd, dev, old,
-                                   row.button if row is not None else None)
-                if run is None or not run.done:
-                    continue
-                if not _replace(dev, old, build_group(run, old)):
-                    continue
-                _reload(dev, rig)
-                dirty = True
+                if _describe(tui, fd, dev, rig, old,
+                             row.button if row is not None else None):
+                    dirty = True
     finally:
         os.close(fd)
 

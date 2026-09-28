@@ -172,13 +172,20 @@ class WhatCountsAsAnAnswer(unittest.TestCase):
     def test_otherwise_nothing_is_not(self):
         self.assertFalse(q.answered(self.ask('press'), None))
 
-    def test_the_question_that_collects_is_not_the_skippable_one(self):
-        sheet = sheet_of()
-        collect = [a for a in sheet.of(q.CONTROL) if a.how == 'collect']
+    def test_nothing_pressed_is_an_answer_where_the_ask_says_so(self):
+        # A stick is three axes and not one button, so `nothing to press`
+        # has to be sayable. What it used to guard against -- a control
+        # with no buttons reaching the list as a row with no name -- is
+        # refused by `_replace`, which is where it belongs: the thing
+        # wrong with such an entry is that it owns nothing at all.
+        self.assertTrue(q.answered(self.ask(skip=True), ([], set())))
+
+    def test_and_the_real_one_that_collects_says_so(self):
+        collect = [a for a in sheet_of().of(q.CONTROL) if a.how == 'collect']
         self.assertTrue(collect)
         for a in collect:
             with self.subTest(ask=a.id):
-                self.assertFalse(a.skip)
+                self.assertTrue(a.skip)
 
 
 def sheet_of():
@@ -410,9 +417,10 @@ class TheDescriptorMayNotOfferWhatTheReaderRefuses(unittest.TestCase):
         sheet = q.read()
         import devicemap
         self.assertTrue({c['name'] for c in sheet.vocabulary['kind']}
-                        <= set(devicemap.SHAPES))
-        self.assertTrue({c['name'] for c in sheet.vocabulary['axis_kind']}
-                        <= set(devicemap.AXIS_KINDS))
+                        <= set(devicemap.KINDS))
+        self.assertTrue({c.get('makes', c['name'])
+                         for c in sheet.vocabulary['axis_kind']}
+                        <= set(devicemap.KINDS))
 
 
 class AScaleIsStoredAsItsNumber(unittest.TestCase):
@@ -626,3 +634,55 @@ class AVocabularyEntryMayNotSayWhatNothingReads(unittest.TestCase):
             for c in entries:
                 with self.subTest(vocabulary=name):
                     self.assertFalse(set(c) - set(q.ENTRY_KEYS))
+
+
+class WhatAnAxisMenuEntryMakes(unittest.TestCase):
+    """An entry is a way of saying what you just moved. What it MAKES is
+    the control, and the two are not the same: `stick-x` is one axis of a
+    `stick`, the way `up` is one direction of a `hat4`."""
+
+    def sheet(self, entry):
+        out = ['[[ask]]', 'id = "x"', 'of = "control"', 'how = "pick"',
+               'says = "?"', 'sets = "kind"', 'uses = "axis_kind"',
+               '[[vocabulary.axis_kind]]']
+        for k, v in entry.items():
+            out.append(f'{k} = "{v}"')
+        return '\n'.join(out) + '\n' + LEVELS_TOML
+
+    def read(self, entry):
+        import tempfile
+        with tempfile.NamedTemporaryFile('w', suffix='.toml',
+                                         delete=False) as fh:
+            path = fh.name
+            fh.write(self.sheet(entry))
+        try:
+            return q.read(path)
+        finally:
+            os.unlink(path)
+
+    def test_it_must_make_a_kind_the_reader_accepts(self):
+        with self.assertRaises(ValueError) as caught:
+            self.read({'name': 'flap-x', 'says': 'a flap',
+                       'makes': 'flapper', 'role': 'x'})
+        self.assertIn('flapper', str(caught.exception))
+
+    def test_which_axis_of_it_goes_with_which_control_it_makes(self):
+        for entry in ({'name': 'a', 'says': 's', 'makes': 'stick'},
+                      {'name': 'a', 'says': 's', 'role': 'x'}):
+            with self.subTest(entry=entry):
+                with self.assertRaises(ValueError):
+                    self.read(entry)
+
+    def test_a_role_nothing_knows(self):
+        with self.assertRaises(ValueError):
+            self.read({'name': 'a', 'says': 's', 'makes': 'stick',
+                       'role': 'sideways'})
+
+    def test_an_entry_that_is_the_whole_control_needs_neither(self):
+        self.read({'name': 'lever', 'says': 'a lever'})
+
+    def test_the_real_descriptor_makes_only_real_kinds(self):
+        import devicemap
+        for c in q.read().vocabulary['axis_kind']:
+            with self.subTest(entry=c['name']):
+                self.assertIn(c.get('makes', c['name']), devicemap.KINDS)

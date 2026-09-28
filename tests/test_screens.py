@@ -153,7 +153,8 @@ class HowFarAControlHasGot(unittest.TestCase):
         self.assertEqual([6, 7, 8], [r.button for r in rows])
         for row in rows:
             with self.subTest(row=row.text):
-                self.assertIn('not described yet', row.text)
+                self.assertIn(screens.NOT_A_CONTROL['unknown'][0],
+                              row.text)
                 self.assertNotIn('position', row.text)
                 self.assertNotIn('tier', row.text)
 
@@ -489,6 +490,27 @@ class EveryRowFitsThePanelItIsIn(unittest.TestCase):
         for _tone, text in rows:
             with self.subTest(row=text):
                 self.assertLessEqual(len(text), self.room)
+
+    def fits_the_box(self, body):
+        _y, x, _h, bw = ui.box_for(body, 24, 80, self.dev.product, True)
+        room = ui.text_in(x, bw)[1]
+        for text in body:
+            with self.subTest(row=text):
+                self.assertLessEqual(len(text), room)
+
+    def test_a_device_with_nothing_described_yet(self):
+        # Loose buttons and loose axes are the widest rows there are:
+        # every column is blank and the reason sits at the end of them.
+        fresh = fake.device(kind='stick',
+                            groups=[fake.group('unknown', [0, 1])],
+                            axes=[{'index': 0, 'kind': 'unknown',
+                                   'source': 'unknown'},
+                                  {'index': 11, 'kind': 'unknown',
+                                   'source': 'unknown'}])
+        rows = screens.control_rows(fresh)
+        # Two loose buttons, and a control for each of the two axes.
+        self.assertEqual(4, len(rows))
+        self.fits_the_box([r.text for r in rows])
 
     def test_every_control_on_the_main_list(self):
         # A full-width box rather than a panel, so its own width, and it
@@ -1356,3 +1378,56 @@ class WhatASaveWouldChange(unittest.TestCase):
             self.raw(axes=[{'index': 2, 'label': 'Left lever'}]), self.raw())
         self.assertIn('gone', got[0][1])
         self.assertIn('Left lever', got[0][1])
+
+
+class WhatSavingWouldChangeAboutTheDesk(unittest.TestCase):
+    """In fingers walked and controls moved, not in spots: a spot is how
+    the file says it, and `thumb, HOME` is what you did."""
+
+    def rig(self, **kw):
+        return {'device': [dict({'slug': 'a-stick'}, **kw)]}
+
+    def test_nothing_moved_is_no_rows(self):
+        one = self.rig(rounds=[['HOME', 'thumb']])
+        self.assertEqual([], screens.desk_rows(one, one, 'a-stick'))
+
+    def test_a_finger_you_walked_says_so(self):
+        got = screens.desk_rows(self.rig(),
+                                self.rig(rounds=[['HOME', 'thumb']]),
+                                'a-stick')
+        self.assertIn('walked', got[0][1])
+        self.assertIn('thumb', got[0][1])
+
+    def test_one_you_took_back_says_forgot(self):
+        got = screens.desk_rows(self.rig(rounds=[['HOME', 'thumb']]),
+                                self.rig(), 'a-stick')
+        self.assertIn('forgot', got[0][1])
+
+    def test_controls_that_moved_are_counted(self):
+        got = screens.desk_rows(
+            self.rig(),
+            self.rig(access={'a': [{'level': 'HOME'}],
+                             'b': [{'level': 'OFF'}]}), 'a-stick')
+        self.assertTrue(any('2 controls' in t for _tone, t in got), got)
+
+    def test_which_hand_is_on_it_counts_too(self):
+        got = screens.desk_rows(self.rig(hand='left'),
+                                self.rig(hand='right'), 'a-stick')
+        self.assertTrue(any('hand' in t for _tone, t in got), got)
+
+    def test_another_device_on_the_same_desk_is_not_this_one(self):
+        before = {'device': [{'slug': 'a-stick'},
+                             {'slug': 'a-throttle', 'rounds': []}]}
+        after = {'device': [{'slug': 'a-stick'},
+                            {'slug': 'a-throttle',
+                             'rounds': [['HOME', 'thumb']]}]}
+        self.assertEqual([], screens.desk_rows(before, after, 'a-stick'))
+
+    def test_a_desk_that_did_not_name_it_before_is_all_new(self):
+        got = screens.desk_rows({'device': []},
+                                self.rig(rounds=[['HOME', 'thumb']]),
+                                'a-stick')
+        self.assertEqual(1, len(got))
+        self.assertIn('walked', got[0][1])
+
+

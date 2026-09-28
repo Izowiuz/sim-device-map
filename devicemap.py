@@ -397,6 +397,39 @@ def name_ids(groups):
     return groups
 
 
+def own_axes(data):
+    """Give every axis a control, in place. The ones it added.
+
+    An axis is a control. It has a reach, it has an ergonomics, and it is
+    something you bind -- all of which live on a group, so an axis with no
+    group could carry none of them. Two of the throttle's three levers sat
+    like that: described, measured, and unable to say which finger gets
+    them, while the brake lever next to them said `tier 0` for no better
+    reason than that it also has a button to press.
+
+    The hardware facts stay on the `[[axis]]` entry, which is where they
+    were measured. This adds only the thing that owns it, and only the
+    fields that are not the default: the writer leaves an empty `states`
+    out, so putting one here made every such control differ from its own
+    file for ever.
+    """
+    owned = {n for g in data.get('group') or [] for n in g.get('axes') or []}
+    made = []
+    for a in data.get('axis') or []:
+        if a['index'] in owned:
+            continue
+        kind = a.get('kind')
+        # Never `unknown`: that kind is the bucket of buttons nobody has
+        # described, and a control landing in it is one the list expands
+        # into its buttons -- of which an axis has none, so it vanished.
+        made.append({'kind': 'axis' if kind in (None, '', 'unknown') else kind,
+                     'label': a.get('label') or f'axis {a["index"]}',
+                     'axes': [a['index']],
+                     'source': a.get('source', 'unknown')})
+    data.setdefault('group', []).extend(made)
+    return made
+
+
 class Device:
     def __init__(self, data, path):
         self.path = path
@@ -416,6 +449,12 @@ class Device:
         self.game_ids = first.get('games', {})
         self.fingerprint = data.get('fingerprint', {})
         self._axes = [Axis(**a) for a in data.get('axis', [])]
+        own_axes(data)
+        # Named here and not only on the way out: an id is what a desk
+        # writes reach against, so a control without one cannot be
+        # reached until somebody saves -- and the control it names has
+        # existed since the file was read.
+        name_ids(data.get('group') or [])
         self._groups = [Group(**g) for g in data.get('group', [])]
         # What a rig would say about it, until one does. A device on no
         # desk is under no hand, and the alternative is that every reader

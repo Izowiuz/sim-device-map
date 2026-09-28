@@ -137,7 +137,7 @@ class Row:
 
 
 def control_rows(dev):
-    """[Row] -- every control, and every button that is not one yet.
+    """[Row] -- every control, and everything that is not one yet.
 
     The buttons nobody has described used to be a single row, and that row
     did nothing: the most natural gesture on this screen -- put the cursor
@@ -145,6 +145,9 @@ def control_rows(dev):
 
     One row each, then. Until you press them there is no knowing that four
     of them are one hat, and saying so is more honest than a pile.
+
+    An axis is a control too, and gets its row the same way: it has a
+    reach and an ergonomics like anything else you put an action on.
     """
     out = []
     for g in dev.groups():
@@ -445,16 +448,27 @@ def row_of(rows, dev, button):
 
 def _loose_row(button):
     """A button nobody has described, on a line of its own."""
+    return _nothing_yet(f'js {button}', button=button)
+
+
+
+def _nothing_yet(said, **what):
+    """A row for something the file has heard of and nothing more.
+
+    The same columns as a control's row, so the list reads down rather
+    than in two shapes -- and every column after the name is empty on
+    purpose: there is nothing known to put in them yet.
+    """
     return Row(TONE['missing'],
-               f'{MARK["missing"]} {"js " + str(button):28} '
-               f'{"":14} {"":9} {NOT_A_CONTROL["unknown"][0]}',
-               button=button)
+               f'{MARK["missing"]} {said:28} '
+               f'{"":16} {"":9} {NOT_A_CONTROL["unknown"][0]}',
+               **what)
 
 
 #: The rows that are not controls at all, and what each one is. Why it is
 #: that way belongs in the help, not on every line of the list.
 NOT_A_CONTROL = {
-    'unknown': ('not described yet', 'nobody has pressed them yet'),
+    'unknown': ('not described', 'nobody has pressed them yet'),
     'unwired': ('nothing behind them',
                 'the firmware reports them; no button is wired'),
     'switch-position': ('held at rest',
@@ -648,6 +662,36 @@ def _by_id(groups):
 def _said_as(group):
     """What to call a raw group on a screen."""
     return group.get('label') or group.get('kind') or '?'
+
+
+def desk_rows(before, after, slug):
+    """[(tone, text)] -- what saving would change about one desk entry.
+
+    In fingers walked and controls moved, not in spots: a spot is how the
+    file says it, and `HOME/thumb` is what you did.
+    """
+    was = next((d for d in before.get('device') or []
+                if d.get('slug') == slug), {})
+    now = next((d for d in after.get('device') or []
+                if d.get('slug') == slug), {})
+    out = []
+    walked = {tuple(r) for r in now.get('rounds') or []}
+    had = {tuple(r) for r in was.get('rounds') or []}
+    for lvl, finger in sorted(walked - had):
+        out.append(('measured', f'  {"walked":<7} {finger}, {lvl}'))
+    for lvl, finger in sorted(had - walked):
+        out.append(('unset', f'  {"forgot":<7} {finger}, {lvl}'))
+    old_access = was.get('access') or {}
+    new_access = now.get('access') or {}
+    moved = sum(1 for c in set(old_access) | set(new_access)
+                if old_access.get(c) != new_access.get(c))
+    if moved:
+        out.append(('guessed', f'  {"reach":<7} '
+                               f'{ui.plural(moved, "control")}'))
+    for field in ('hand', 'role', 'leaving_home_releases_flight'):
+        if was.get(field) != now.get(field):
+            out.append(('guessed', f'  {"desk":<7} {field}'))
+    return out
 
 
 def found_rows(found):

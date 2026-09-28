@@ -17,6 +17,28 @@ name = "IzoDesk"
 slug = "virpil-vmax-prime-throttle"
 role = "throttle"
 hand = "left"
+rounds = [
+    ["HOME", "thumb"],
+    ["HOME", "index"],
+    ["HOME", "middle"],
+    ["HOME", "pinky"],
+    ["HOME", "ring"],
+    ["EXTENDED", "thumb"],
+]
+
+[device.access]
+big-red-button       = [{ part = "throttle", level = "EXTENDED", finger = "thumb" }]
+bottom-thumb-button  = [{ part = "throttle", level = "HOME", finger = "thumb" }]
+middle-finger-button = [{ part = "throttle", level = "HOME", finger = "middle" }]
+middle-finger-hat    = [{ part = "throttle", level = "HOME", finger = "index" }]
+pinky-button         = [{ part = "throttle", level = "HOME", finger = "pinky" }]
+right-side-dial      = [{ part = "throttle", level = "HOME", finger = "thumb" }]
+t1-rocker            = [{ part = "throttle", level = "EXTENDED", finger = "thumb" }]
+t2-rocker            = [{ part = "throttle", level = "EXTENDED", finger = "thumb" }]
+thumb-button         = [{ part = "throttle", level = "HOME", finger = "thumb" }]
+thumb-hat            = [{ part = "throttle", level = "HOME", finger = "thumb" }]
+thumb-mini-stick     = [{ part = "throttle", level = "HOME", finger = "thumb" }]
+thumb-two-way-hat    = [{ part = "throttle", level = "HOME", finger = "thumb" }]
 
 [[device]]
 slug = "virpil-vpc-stick-warbrd-d"
@@ -30,6 +52,15 @@ rounds = [
     ["HOME", "ring"],
     ["HOME", "pinky"],
     ["EXTENDED", "ring"],
+    ["EXTENDED", "thumb"],
+    ["EXTENDED", "index"],
+    ["EXTENDED", "middle"],
+    ["EXTENDED", "pinky"],
+    ["BASE", "thumb"],
+    ["BASE", "index"],
+    ["BASE", "middle"],
+    ["BASE", "ring"],
+    ["BASE", "pinky"],
 ]
 
 [device.access]

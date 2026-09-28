@@ -1583,12 +1583,18 @@ class SavingAsksFirst(unittest.TestCase):
         capture._set_fact(self.dev, one, 'hold_ok', True)
         return one
 
-    def test_with_nothing_changed_it_says_so_and_writes_nothing(self):
+    def test_with_nothing_changed_it_says_nothing_at_all(self):
+        # The frame drops `unsaved` when there is nothing to write, so a
+        # box saying it again is a keypress nobody asked for.
+        #
+        # Saved once first: reading a file gives every axis a control, so
+        # the first save after that has something real to write.
+        capture._save(self.Asks(yes=True), self.dev)
         was = open(self.path).read()
         tui = self.Asks()
         self.assertTrue(capture._save(tui, self.dev))
         self.assertEqual([], tui.asked)
-        self.assertEqual(['Nothing to save'], tui.shown)
+        self.assertEqual([], tui.shown)
         self.assertEqual(was, open(self.path).read())
 
     def test_a_change_is_named_before_it_is_written(self):
@@ -1597,6 +1603,7 @@ class SavingAsksFirst(unittest.TestCase):
         self.assertTrue(capture._save(tui, self.dev))
         _title, lines, _default = tui.asked[0]
         self.assertTrue(any(one.label in t for t in lines), lines)
+        self.assertIn(os.path.basename(self.path), lines)
 
     def test_saying_no_leaves_the_file_alone(self):
         was = open(self.path).read()
@@ -1615,8 +1622,10 @@ class SavingAsksFirst(unittest.TestCase):
         tui = self.Asks(yes=False)
         capture._save(tui, self.dev)
         _title, lines, _default = tui.asked[0]
-        self.assertTrue(all('new' in t or 'hardware' in t for t in lines),
-                        lines)
+        # The file name heads the block, then every control is new.
+        said = [t for t in lines if not t.endswith('.toml')]
+        self.assertTrue(all('new' in t or 'hardware' in t for t in said),
+                        said)
 
     def test_refusing_leaves_the_device_unsaved(self):
         # `dirty` is what asks again on the way out. Cleared on a refusal,
@@ -1631,3 +1640,180 @@ class SavingAsksFirst(unittest.TestCase):
 
         self.assertFalse(capture._save(Says(), self.dev))
         self.assertTrue(rows)
+
+    def test_the_desk_waits_for_the_same_key(self):
+        # Chosen deliberately: one key saves both files, so a desk cannot
+        # remember a finger the device file has never heard of.
+        rigpath = os.path.join(self.dir, 'desk.toml')
+        rig = devicemap.Profile({'name': 'Desk', 'device': [
+            {'slug': self.dev.slug, 'hand': 'left'}]}, rigpath)
+        capture.write_profile(rig)
+        was = open(rigpath).read()
+        rig.devices[0]['rounds'] = [['HOME', 'thumb']]
+        tui = self.Asks(yes=False)
+        self.assertFalse(capture._save(tui, self.dev, rig))
+        self.assertEqual(was, open(rigpath).read())
+        _title, lines, _default = tui.asked[0]
+        self.assertIn('desk.toml', lines)
+        self.assertTrue(any('walked' in t for t in lines), lines)
+
+    def test_and_yes_writes_both(self):
+        rigpath = os.path.join(self.dir, 'desk.toml')
+        rig = devicemap.Profile({'name': 'Desk', 'device': [
+            {'slug': self.dev.slug, 'hand': 'left'}]}, rigpath)
+        capture.write_profile(rig)
+        rig.devices[0]['rounds'] = [['HOME', 'thumb']]
+        self.change()
+        was_dev, was_rig = open(self.path).read(), open(rigpath).read()
+        self.assertTrue(capture._save(self.Asks(yes=True), self.dev, rig))
+        self.assertNotEqual(was_dev, open(self.path).read())
+        self.assertNotEqual(was_rig, open(rigpath).read())
+
+    def test_a_desk_that_did_not_move_is_left_alone(self):
+        rigpath = os.path.join(self.dir, 'desk.toml')
+        rig = devicemap.Profile({'name': 'Desk', 'device': [
+            {'slug': self.dev.slug, 'hand': 'left'}]}, rigpath)
+        capture.write_profile(rig)
+        os.chmod(rigpath, 0o444)
+        self.change()
+        try:
+            self.assertTrue(capture._save(self.Asks(yes=True), self.dev, rig))
+        finally:
+            os.chmod(rigpath, 0o644)
+
+
+class EveryFingerDoneIsAChange(unittest.TestCase):
+    """`_hands_off` writes OFF onto everything no round reached. It used
+    to write the file itself; now it reports, and the caller carries it
+    to the save like everything else."""
+
+    class Says:
+        def popup(self, title, lines, full=False):
+            self.shown = title
+
+    def test_it_says_when_it_wrote_something(self):
+        dev = fake.devices()[0]
+        said = {'access': {}}
+        self.assertTrue(capture._hands_off(self.Says(), dev, said))
+        self.assertTrue(said['access'])
+
+    def test_and_when_there_was_nothing_left_to_write(self):
+        dev = fake.devices()[0]
+        mine = [{'part': 'throttle', 'level': 'HOME', 'finger': 'thumb'}]
+        said = {'access': {g.id: list(mine)
+                           for g in dev.groups(bindable=True) if g.id}}
+        self.assertFalse(capture._hands_off(self.Says(), dev, said))
+
+    def test_the_reach_screen_carries_that_out(self):
+        # ESC with every finger walked is the moment OFF is written, and
+        # `ask_reach` has to report it or the save never hears about it.
+        dev = fake.devices()[0]
+        levels = q.read().vocabulary['level']
+        every = [[lvl['name'], f] for lvl in levels
+                 for f in devicemap.FINGERS]
+        rig = devicemap.Profile({'name': 'x', 'device': [
+            {'slug': dev.slug, 'hand': 'left', 'rounds': every,
+             'access': {}}]}, '<x>')
+
+        class Leaves(self.Says):
+            def browse(self, *a, **kw):
+                return None, 0
+
+        self.assertTrue(capture.ask_reach(Leaves(), None, dev, rig))
+
+    def test_and_says_nothing_when_there_was_nothing_to_add(self):
+        dev = fake.devices()[0]
+        rig = devicemap.Profile({'name': 'x', 'device': [
+            {'slug': dev.slug, 'hand': 'left'}]}, '<x>')
+
+        class Leaves(self.Says):
+            def browse(self, *a, **kw):
+                return None, 0
+
+        self.assertFalse(capture.ask_reach(Leaves(), None, dev, rig))
+
+
+class FindingTheAxisYouPicked(unittest.TestCase):
+    """An axis number tells you nothing about which piece of plastic it
+    is, so the screen says whether the thing under your hand is the one
+    you picked off the list."""
+
+    def moved(self, which, wanted=None, to=30000):
+        read_fd, write_fd = os.pipe()
+        scr = TheRoundCollectorDriven.Feeds(
+            write_fd, [(capture.JS_EVENT_AXIS, which, 0),
+                       (capture.JS_EVENT_AXIS, which, to)])
+        t = tui.Tui(scr, tui.Theme(False))
+        try:
+            got = capture.one_axis(t, read_fd, 'Axis', ['x'], wanted=wanted)
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        return got, scr
+
+    def test_it_reports_whichever_moved_furthest(self):
+        (idx, _travel), _scr = self.moved(3)
+        self.assertEqual(3, idx)
+
+    def test_the_one_you_picked_says_so(self):
+        _got, scr = self.moved(3, wanted=3)
+        self.assertTrue(any('that one' in f for f in scr.frames),
+                        scr.frames[-1])
+
+    def test_and_another_says_it_is_another(self):
+        _got, scr = self.moved(3, wanted=5)
+        self.assertTrue(any('different axis' in f for f in scr.frames),
+                        scr.frames[-1])
+
+    def test_with_nothing_picked_it_says_neither(self):
+        _got, scr = self.moved(3)
+        said = '\n'.join(scr.frames)
+        self.assertNotIn('that one', said)
+        self.assertNotIn('different axis', said)
+
+
+class ADialMadeHereLoadsBackIn(unittest.TestCase):
+    """This flow was the last one still building the shape the reader
+    stopped accepting when the converter went."""
+
+    def test_the_entry_it_writes_is_one_the_reader_takes(self):
+        entry = {'kind': 'dial', 'label': 'Wheel', 'axes': [4],
+                 'source': 'measured',
+                 'states': capture.states_of('dial', [],
+                                             contacts=[('push', 9)])}
+        got = devicemap.Group(**entry)
+        self.assertEqual([4], got.axes)
+        self.assertEqual(9, got.push)
+        self.assertEqual([], got.places)
+
+    def test_and_one_with_no_click_too(self):
+        entry = {'kind': 'dial', 'label': 'Wheel', 'axes': [4],
+                 'source': 'measured', 'states': capture.states_of('dial', [])}
+        got = devicemap.Group(**entry)
+        self.assertIsNone(got.push)
+        self.assertEqual([], got.all_buttons)
+
+    def test_the_old_shape_is_refused_outright(self):
+        # Which is the point of having removed the converter: a flow
+        # still building it fails loudly rather than quietly.
+        with self.assertRaises(TypeError):
+            devicemap.Group(**{'kind': 'dial', 'buttons': [],
+                               'label': 'Wheel', 'axes': [4]})
+
+    def test_the_flow_itself_writes_something_readable(self):
+        # Built by the flow, not by hand: the bug was the flow's dict,
+        # and a test that writes its own cannot see it.
+        real = devicemap.load_all(bare=True)[0]
+        dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
+        read_fd, write_fd = os.pipe()
+        scr = TheRoundCollectorDriven.Feeds(write_fd, [])
+        t = tui.Tui(scr, tui.Theme(False))
+        try:
+            self.assertTrue(capture.capture_ministick(
+                t, dev, read_fd, first_axis=4, kind='dial', n_axes=1))
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        again = devicemap.Device(dev._raw, dev.path)
+        one = next(g for g in again.groups() if 4 in (g.axes or []))
+        self.assertEqual('dial', one.kind)

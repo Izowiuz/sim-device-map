@@ -65,10 +65,23 @@ class EveryCaptureSurvivesTheWriter(unittest.TestCase):
     Losing a field is a different matter, and that is what this asks."""
 
     def test_nothing_is_lost(self):
+        # Every group that was there is still there. Reading a file also
+        # gives every axis a control, so the writer puts back MORE than
+        # it read -- which is the one direction that loses nothing.
         for path in CAPTURES:
             with self.subTest(path=os.path.basename(path)):
-                before, after = parsed(path), rewritten(path)
-                self.assertEqual(_normal(before), _normal(after))
+                before, after = _normal(parsed(path)), _normal(rewritten(path))
+                for key in set(before) - {'group'}:
+                    self.assertEqual(before[key], after[key], key)
+                for group in before['group']:
+                    self.assertIn(group, after['group'])
+
+    def test_and_what_it_gains_is_a_control_for_every_axis(self):
+        for path in CAPTURES:
+            with self.subTest(path=os.path.basename(path)):
+                after = _normal(rewritten(path))
+                owned = {n for g in after['group'] for n in g.get('axes') or ()}
+                self.assertEqual({a['index'] for a in after['axis']}, owned)
 
     def test_writing_twice_settles(self):
         for path in CAPTURES:

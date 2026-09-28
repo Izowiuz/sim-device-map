@@ -207,3 +207,58 @@ class WhatIsPluggedIn(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class AnAxisIsAControlToo(unittest.TestCase):
+    """It has a reach, an ergonomics, and it is something you bind — all
+    of which live on a group. Two of the throttle's three levers sat with
+    none of it: described, measured, and unable to say which finger gets
+    them, while the brake lever beside them said `tier 0` for no better
+    reason than that it also has a button to press."""
+
+    def dev(self, *axes, groups=()):
+        return fake.device(kind='stick', groups=list(groups),
+                           axes=[dict(a) for a in axes])
+
+    def test_an_axis_nothing_owned_gets_a_control(self):
+        got = self.dev({'index': 4, 'kind': 'lever', 'label': 'Side lever',
+                        'source': 'measured'})
+        one = got.axis_group(4)
+        assert one is not None
+        self.assertEqual('Side lever', one.label)
+        self.assertEqual([4], one.axes)
+
+    def test_and_it_can_carry_what_every_control_carries(self):
+        got = self.dev({'index': 4, 'kind': 'lever', 'label': 'Side lever',
+                        'source': 'measured'})
+        one = got.axis_group(4)
+        assert one is not None
+        self.assertTrue(one.id)
+        self.assertTrue(one.bindable)
+        self.assertIsNone(one.tier)
+        self.assertIsNone(one.fact('blind_distinct'))
+
+    def test_one_a_control_already_owned_is_left_alone(self):
+        got = self.dev({'index': 5, 'kind': 'dial', 'label': 'Wheel',
+                        'source': 'measured'},
+                       groups=[fake.group('dial', [], label='Wheel',
+                                          id='wheel', axes=[5])])
+        self.assertEqual(1, len([g for g in got.groups() if 5 in g.axes]))
+
+    def test_an_undescribed_one_does_not_land_in_the_bucket(self):
+        # `unknown` is the pile of buttons nobody has pressed. A control
+        # in it is one the list expands into its buttons, of which an
+        # axis has none -- so it vanished off the screen entirely.
+        got = self.dev({'index': 0, 'kind': 'unknown', 'source': 'unknown'})
+        one = got.axis_group(0)
+        assert one is not None
+        self.assertNotEqual('unknown', one.kind)
+        self.assertIn('axis 0', one.label)
+
+    def test_it_says_nothing_the_writer_would_leave_out(self):
+        # An empty `states` is the default, and the writer omits it. Put
+        # in here, every such control differed from its own file for ever.
+        got = self.dev({'index': 4, 'kind': 'lever', 'label': 'Side lever',
+                        'source': 'measured'})
+        raw = next(g for g in got._raw['group'] if g.get('axes') == [4])
+        self.assertNotIn('states', raw)

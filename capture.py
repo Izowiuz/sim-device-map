@@ -211,10 +211,15 @@ def classify_travel(values):
     return 'stepped' if len(set(values)) <= 5 and not inner else 'analog'
 
 
-def one_axis(tui, fd, title, help_lines):
+def one_axis(tui, fd, title, help_lines, wanted=None):
     """Whichever axis moves furthest from where it started.
 
     Returns (index, travel) -- travel says whether it sweeps or steps.
+
+    `wanted` is the one you picked off the list. Saying whether the thing
+    under your hand is that one is the only way to find out short of
+    moving everything and counting: an axis number tells you nothing
+    about which piece of plastic it is.
     """
     start, moved, seen = {}, {}, {}
     while True:
@@ -223,8 +228,11 @@ def one_axis(tui, fd, title, help_lines):
         said = [('plain', 'move ONE axis through its full travel,'
                           ' then RETURN'), ('plain', '')]
         if best is not None:
-            said.append(('measured',
-                         f'axis {best}   (travel seen: {moved[best]})'))
+            said.append(('measured' if wanted in (None, best) else 'meta',
+                         f'axis {best}   (travel seen: {moved[best]})'
+                         + ('' if wanted is None else
+                            '   that one' if best == wanted
+                            else '   different axis')))
             if travel:
                 said.append(('meta', 'reports a continuous sweep'
                              if travel == 'analog' else
@@ -844,7 +852,8 @@ def _clear_round(tui, dev, prof, said, one):
         return False
     if not forget_round(said, one):
         return False
-    write_profile(prof)
+    # Not written here. The desk waits for `s` like the device file: one
+    # key saves the lot, and until you press it nothing on disk moved.
     dev.under(prof)
     return True
 
@@ -894,8 +903,7 @@ def ask_reach(tui, fd, dev, prof):
             count=lambda _n: '')
         if what is None:
             if done == len(rounds):
-                _hands_off(tui, dev, said)
-                write_profile(prof)
+                moved = _hands_off(tui, dev, said) or moved
             return moved
         one = screens._round_at(rounds, at)
         if one is None:
@@ -1031,7 +1039,6 @@ def _one_round(tui, fd, dev, prof, said, one):
     walked = said.setdefault('rounds', [])
     if [one.level['name'], one.finger] not in walked:
         walked.append([one.level['name'], one.finger])
-    write_profile(prof)
     return True
 
 
@@ -1051,14 +1058,16 @@ def _hands_off(tui, dev, said):
             if g.id and not access.get(g.id)]
     for g in left:
         access[g.id] = [{'part': 'panel', 'level': 'OFF'}]
-    if left:
-        tui.popup(
-            'Every finger done',
-            [('plain', f'You never pressed {ui.plural(len(left), "control")}'
-                       ' from any grip, so reaching them means taking your'
-                       ' hand off the device. That is now what they say.'),
-             ('plain', '')]
-            + [('meta', f'  {g.label or g.kind}') for g in left])
+    if not left:
+        return False
+    tui.popup(
+        'Every finger done',
+        [('plain', f'You never pressed {ui.plural(len(left), "control")}'
+                   ' from any grip, so reaching them means taking your'
+                   ' hand off the device. That is now what they say.'),
+         ('plain', '')]
+        + [('meta', f'  {g.label or g.kind}') for g in left])
+    return True
 
 
 def reach_from(dev, pressed):
@@ -1432,10 +1441,14 @@ def capture_ministick(tui, dev, fd, click=None, first_axis=None,
     if label is None:
         return False
 
-    entry = {'kind': kind, 'buttons': [], 'label': label,
-             'axes': axes, 'source': 'measured'}
-    if click is not None:
-        entry['push'] = click
+    # `states` and not `buttons`: this flow was the last one still
+    # building the shape the reader stopped accepting when the converter
+    # went, so a dial made here would not load back.
+    entry = {'kind': kind, 'label': label, 'axes': axes,
+             'source': 'measured',
+             'states': states_of(kind, [],
+                                 contacts=[('push', click)]
+                                 if click is not None else [])}
     # replace anything that already claimed these axes or that button -- but
     # never the unknown pool, whose all_of() is every button left to capture
     for g in [g for g in raw['group']
@@ -1457,13 +1470,14 @@ def capture_ministick(tui, dev, fd, click=None, first_axis=None,
     return True
 
 
-def capture_axis(tui, dev, fd):
+def capture_axis(tui, dev, fd, wanted=None):
     raw = dev._raw
     head = f'{dev.product} — axis'
     drain(fd)
     idx, travel = one_axis(tui, fd, head,
                            ['Move one axis end to end so it can be told apart.',
-                            'Its resting behaviour is already measured.'])
+                            'Its resting behaviour is already measured.'],
+                           wanted=wanted)
     if idx is None:
         return False
     existing = next((a for a in raw.get('axis', []) if a['index'] == idx), None)
@@ -1526,25 +1540,40 @@ def reset_grouping(raw, n_buttons):
                                                  for b in all_of(g)})]}]
 
 
-def _save(tui, dev):
+def _read_back(path):
+    """What is on disk at `path`, or nothing when there is no file yet."""
+    try:
+        with open(path, 'rb') as fh:
+            return tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def _save(tui, dev, rig=None):
     """Show what writing would change, then write it. True if it went.
 
-    Asked because the file is the only copy: what a control IS took real
-    time to measure, and a save is how a mistake reaches it.
+    Both files at once, because one key saving one of them is how you end
+    up with a desk that remembers a finger the device file has never
+    heard of. Asked because these are the only copies: what a control IS
+    took real time to measure, and a save is how a mistake reaches it.
     """
-    try:
-        with open(dev.path, 'rb') as fh:
-            before = tomllib.load(fh)
-    except (OSError, tomllib.TOMLDecodeError):
-        before = {}
-    said = screens.save_rows(before, dev._raw)
-    if not said:
-        tui.popup('Nothing to save',
-                  [('plain', 'The file already says all of this.')])
+    said = screens.save_rows(_read_back(dev.path), dev._raw)
+    desk = (screens.desk_rows(_read_back(rig.path), rig._as_dict(), dev.slug)
+            if rig is not None else [])
+    rows = (([('subhead', os.path.basename(dev.path))] + said if said else [])
+            + ([('subhead', os.path.basename(rig.path))] + desk
+               if desk and rig is not None else []))
+    if not rows:
+        # Nothing at all: the frame drops `unsaved` when there is nothing
+        # to write, so the screen has already said it and a box saying it
+        # again is a keypress you did not ask for.
         return True
-    if not tui.confirm(f'Save {os.path.basename(dev.path)}?', said):
+    if not tui.confirm('Save?', rows):
         return False
-    write_device(dev)
+    if said:
+        write_device(dev)
+    if desk and rig is not None:
+        write_profile(rig)
     return True
 
 
@@ -1592,11 +1621,12 @@ def overview(tui, dev, js, rig, probe=None):
                     dev._raw['fingerprint'] = {
                         k: probe[k] for k in ('buttons', 'axes', 'axmap', 'hid')
                         if k in probe}
-                if _save(tui, dev):
+                if _save(tui, dev, rig):
                     dirty = False
             elif got in ('r', 'R'):
                 if ask_reach(tui, fd, dev, rig):
                     _reload(dev, rig)
+                    dirty = True
             elif got in ('f', 'F'):
                 dirty = ask_facts(tui, fd, dev) or dirty
             elif got in ('a', 'A'):
@@ -2053,12 +2083,10 @@ def tui_main(scr, rig):
                 dev.__init__(dev._raw, dev.path)
 
         dirty = overview(tui, dev, js, rig, m.probe)
-        if dirty and tui.confirm(
-                'Unsaved changes',
-                [f'{dev.product} has changes that are not written.', '',
-                 'Write them to the device file?'],
-                ['The file is validated before it replaces the old one.']):
-            write_device(dev)
+        if dirty:
+            # The same screen `s` puts up, so leaving is not a second way
+            # of saving with its own idea of what is about to be written.
+            _save(tui, dev, rig)
         if len(found) == 1:
             return
 

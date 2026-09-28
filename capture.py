@@ -790,6 +790,79 @@ def _suggest(run):
     return (entry['says'].split(' (')[0].title() if entry else '')
 
 
+def forget_round(said, one):
+    """Take a walked finger back off the desk. True if anything went.
+
+    Not the same as walking it again and pressing nothing: that records
+    "this finger reaches nothing", which is an answer. This puts the
+    round back to never having been done, which is the only way to say
+    "ignore what I did there" -- and without it a mistake could only be
+    overwritten, never withdrawn.
+    """
+    level, finger = one.level['name'], one.finger
+    access = said.get('access') or {}
+    gone = False
+    for ctrl, spots in list(access.items()):
+        keep = [sp for sp in spots
+                if not (sp.get('level') == level
+                        and sp.get('finger') == finger)]
+        if len(keep) != len(spots):
+            gone = True
+            if keep:
+                access[ctrl] = keep
+            else:
+                del access[ctrl]
+    walked = said.get('rounds') or []
+    if [level, finger] in walked:
+        walked.remove([level, finger])
+        gone = True
+    return gone
+
+
+def forget_fact(dev, field):
+    """Unanswer one ergonomic fact on every control. True if any had one."""
+    gone = False
+    for g in dev.groups(bindable=True):
+        if g.told(field) == 'measured':
+            _set_fact(dev, g, field, None)
+            gone = True
+    return gone
+
+
+def _clear_round(tui, dev, prof, said, one):
+    """Ask, then take one walked finger back. True if the file changed."""
+    if not one.done and not one.found:
+        return False
+    named = {g.id: g.label or g.kind for g in dev.groups(bindable=True)}
+    who = f'{screens.finger_said(one.finger)}, {one.level["says"]}'
+    if not tui.confirm(
+            f'Forget {who}?',
+            [f'{ui.plural(len(one.found), "control")} reached this way'
+             + (':' if one.found else '.')]
+            + [f'  {named.get(c, c)}' for c in one.found],
+            default=False):
+        return False
+    if not forget_round(said, one):
+        return False
+    write_profile(prof)
+    dev.under(prof)
+    return True
+
+
+def _clear_fact(tui, dev, ask):
+    """Ask, then unanswer one fact on every control. True if any had one."""
+    told = sum(1 for g in dev.groups(bindable=True)
+               if g.told(ask.sets) == 'measured')
+    if not told:
+        return False
+    if not tui.confirm(
+            f'Forget {screens.caption(ask)}?',
+            [f'{ui.plural(told, "control")} answered this one.'],
+            default=False):
+        return False
+    return forget_fact(dev, ask.sets)
+
+
 def ask_reach(tui, fd, dev, prof):
     """Reach, measured by reaching. True if the rig moved.
 
@@ -812,9 +885,9 @@ def ask_reach(tui, fd, dev, prof):
             f'Reach — {dev.product}', rows,
             lambda n: screens.reach_side(dev, rounds, n, note,
                                          room=_panel_rows(tui)),
-            keys=('↑↓ move', '↵ measure', 'ESC done'),
+            keys=('↑↓ move', '↵ measure', 'c clear', 'ESC done'),
             right=f'{done} of {len(rounds)} done',
-            index=at, aside='this round',
+            index=at, aside='this round', takes=('c', 'C'),
             # The rows are not the rounds -- three of them are postures --
             # so counting rows here would disagree with the count on the
             # other half of the frame. Which round it is, the cursor says.
@@ -829,6 +902,9 @@ def ask_reach(tui, fd, dev, prof):
             # A heading is not a round. Rather than a key that does
             # nothing on a third of the rows, it goes where it says.
             at = screens.next_round_at(rounds, at)
+        elif what in ('c', 'C'):
+            if _clear_round(tui, dev, prof, said, one):
+                moved = True
         elif _one_round(tui, fd, dev, prof, said, one):
             moved = True
 
@@ -1030,10 +1106,15 @@ def ask_facts(tui, fd, dev):
         what, at = tui.browse(
             f'Facts — {dev.product}', rows,
             lambda n: screens.fact_side(dev, asks, n),
-            keys=('↑↓ move', '↵ answer this one', 'ESC done'),
-            right=f'{done} of {len(asks)} answered', index=at)
+            keys=('↑↓ move', '↵ answer this one', 'c clear', 'ESC done'),
+            right=f'{done} of {len(asks)} answered', index=at,
+            takes=('c', 'C'))
         if what is None:
             return moved
+        if what in ('c', 'C'):
+            if _clear_fact(tui, dev, asks[at]):
+                moved = True
+            continue
         moved = ask_all(tui, fd, dev, asks[at]) or moved
 
 
@@ -1445,6 +1526,28 @@ def reset_grouping(raw, n_buttons):
                                                  for b in all_of(g)})]}]
 
 
+def _save(tui, dev):
+    """Show what writing would change, then write it. True if it went.
+
+    Asked because the file is the only copy: what a control IS took real
+    time to measure, and a save is how a mistake reaches it.
+    """
+    try:
+        with open(dev.path, 'rb') as fh:
+            before = tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError):
+        before = {}
+    said = screens.save_rows(before, dev._raw)
+    if not said:
+        tui.popup('Nothing to save',
+                  [('plain', 'The file already says all of this.')])
+        return True
+    if not tui.confirm(f'Save {os.path.basename(dev.path)}?', said):
+        return False
+    write_device(dev)
+    return True
+
+
 def overview(tui, dev, js, rig, probe=None):
     """Every control on one device, and how far each has got.
 
@@ -1489,8 +1592,8 @@ def overview(tui, dev, js, rig, probe=None):
                     dev._raw['fingerprint'] = {
                         k: probe[k] for k in ('buttons', 'axes', 'axmap', 'hid')
                         if k in probe}
-                write_device(dev)
-                dirty = False
+                if _save(tui, dev):
+                    dirty = False
             elif got in ('r', 'R'):
                 if ask_reach(tui, fd, dev, rig):
                     _reload(dev, rig)

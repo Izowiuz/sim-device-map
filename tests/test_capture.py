@@ -12,6 +12,7 @@ import copy
 import os
 import shutil
 import struct
+import tomllib
 import tempfile
 import unittest
 from unittest import mock
@@ -1345,3 +1346,288 @@ class PressingAControlShowsItAtOnce(unittest.TestCase):
     def test_a_button_no_control_owns_changes_nothing(self):
         before = self.press(self.one.buttons[0]).seen[0][1]
         self.assertTrue(before.startswith('1 of'))
+
+
+class TakingAnAnswerBack(unittest.TestCase):
+    """Walking a finger again and pressing nothing records `reaches
+    nothing`, which is an answer. There was no way to say `ignore what I
+    did there` -- a mistake could be overwritten and never withdrawn."""
+
+    def setUp(self):
+        self.said = {
+            'slug': 'x', 'hand': 'left',
+            'rounds': [['HOME', 'thumb'], ['HOME', 'index']],
+            'access': {
+                'a': [{'part': 'stick', 'level': 'HOME', 'finger': 'thumb'}],
+                'b': [{'part': 'stick', 'level': 'HOME', 'finger': 'thumb'},
+                      {'part': 'stick', 'level': 'HOME', 'finger': 'index'}]}}
+        lvl = {'name': 'HOME', 'says': 'in the normal grip'}
+        self.one = screens.Round(lvl, 'thumb', ['a', 'b'], True)
+
+    def test_the_spots_that_round_wrote_go(self):
+        self.assertTrue(capture.forget_round(self.said, self.one))
+        self.assertNotIn('a', self.said['access'])
+        self.assertEqual([{'part': 'stick', 'level': 'HOME',
+                           'finger': 'index'}], self.said['access']['b'])
+
+    def test_and_so_does_its_place_in_the_walk(self):
+        capture.forget_round(self.said, self.one)
+        self.assertEqual([['HOME', 'index']], self.said['rounds'])
+
+    def test_what_another_finger_found_is_left_alone(self):
+        capture.forget_round(self.said, self.one)
+        self.assertIn('b', self.said['access'])
+
+    def test_forgetting_twice_changes_nothing_the_second_time(self):
+        self.assertTrue(capture.forget_round(self.said, self.one))
+        self.assertFalse(capture.forget_round(self.said, self.one))
+
+    def test_a_walked_round_that_found_nothing_can_still_be_taken_back(self):
+        said = {'rounds': [['BASE', 'pinky']], 'access': {}}
+        lvl = {'name': 'BASE', 'says': 'with your hand off the grip'}
+        one = screens.Round(lvl, 'pinky', [], True)
+        self.assertTrue(capture.forget_round(said, one))
+        self.assertEqual([], said['rounds'])
+
+
+class UnansweringOneFact(unittest.TestCase):
+
+    def setUp(self):
+        real = fake.devices()[0]
+        self.dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
+        self.dev.under(fake.rig(real))
+        self.controls = [g for g in self.dev.groups(bindable=True) if g.id]
+        for g in self.controls[:3]:
+            capture._set_fact(self.dev, g, 'hold_ok', True)
+
+    def test_every_control_that_had_one_loses_it(self):
+        self.assertTrue(capture.forget_fact(self.dev, 'hold_ok'))
+        for g in self.dev.groups(bindable=True):
+            with self.subTest(ctrl=g.id):
+                self.assertEqual('missing', g.told('hold_ok'))
+
+    def test_it_reaches_the_file_and_not_only_the_thing_in_hand(self):
+        capture.forget_fact(self.dev, 'hold_ok')
+        for raw in self.dev._raw['group']:
+            with self.subTest(ctrl=raw.get('id')):
+                self.assertIsNone(raw.get('hold_ok'))
+
+    def test_the_other_four_facts_are_left_alone(self):
+        capture._set_fact(self.dev, self.controls[0], 'rapid_ok', True)
+        capture.forget_fact(self.dev, 'hold_ok')
+        self.assertEqual('measured', self.controls[0].told('rapid_ok'))
+
+    def test_with_nothing_answered_there_is_nothing_to_forget(self):
+        capture.forget_fact(self.dev, 'hold_ok')
+        self.assertFalse(capture.forget_fact(self.dev, 'hold_ok'))
+
+
+class ClearingAsksFirst(unittest.TestCase):
+    """Both are destructive and neither can be undone, so RETURN is no."""
+
+    class Asks:
+        def __init__(self, yes=False):
+            self.yes, self.asked, self.asides = yes, [], []
+
+        def confirm(self, title, lines, aside=(), default=True):
+            self.asked.append((title, list(lines), default))
+            self.asides.append(list(aside))
+            return self.yes
+
+    def aside_of(self, tui):
+        return tui.asides[0] if tui.asides else []
+
+    def rig(self, dev):
+        return devicemap.Profile({'name': 'x', 'device': [
+            {'slug': dev.slug, 'hand': 'left',
+             'rounds': [['HOME', 'thumb']],
+             'access': {'a': [{'part': 'stick', 'level': 'HOME',
+                               'finger': 'thumb'}]}}]}, '<x>')
+
+    def round_one(self):
+        lvl = {'name': 'HOME', 'says': 'in the normal grip'}
+        return screens.Round(lvl, 'thumb', ['a'], True)
+
+    def test_saying_no_to_a_round_keeps_it(self):
+        dev = fake.devices()[0]
+        prof = self.rig(dev)
+        said = prof.devices[0]
+        tui = self.Asks(yes=False)
+        self.assertFalse(capture._clear_round(tui, dev, prof, said,
+                                              self.round_one()))
+        self.assertEqual([['HOME', 'thumb']], said['rounds'])
+
+    def test_and_return_is_that_no(self):
+        dev = fake.devices()[0]
+        prof = self.rig(dev)
+        tui = self.Asks()
+        capture._clear_round(tui, dev, prof, prof.devices[0],
+                             self.round_one())
+        self.assertFalse(tui.asked[0][2])
+
+    def test_a_round_nobody_walked_is_not_worth_asking_about(self):
+        dev = fake.devices()[0]
+        prof = self.rig(dev)
+        lvl = {'name': 'BASE', 'says': 'off the grip'}
+        tui = self.Asks(yes=True)
+        self.assertFalse(capture._clear_round(
+            tui, dev, prof, prof.devices[0],
+            screens.Round(lvl, 'pinky', [], False)))
+        self.assertEqual([], tui.asked)
+
+    def test_the_question_names_what_would_go(self):
+        dev = fake.devices()[0]
+        one = next(g for g in dev.groups(bindable=True) if g.id)
+        prof = devicemap.Profile({'name': 'x', 'device': [
+            {'slug': dev.slug, 'rounds': [['HOME', 'thumb']],
+             'access': {one.id: [{'part': 'stick', 'level': 'HOME',
+                                  'finger': 'thumb'}]}}]}, '<x>')
+        lvl = {'name': 'HOME', 'says': 'in the normal grip'}
+        tui = self.Asks()
+        capture._clear_round(tui, dev, prof, prof.devices[0],
+                             screens.Round(lvl, 'thumb', [one.id], True))
+        said = '\n'.join(tui.asked[0][1])
+        self.assertIn(one.label or one.kind, said)
+        self.assertIn('1 control', said)
+
+    def test_return_is_no_for_a_fact_too(self):
+        real = fake.devices()[0]
+        dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
+        dev.under(fake.rig(real))
+        one = next(g for g in dev.groups(bindable=True) if g.id)
+        capture._set_fact(dev, one, 'hold_ok', True)
+        ask = next(a for a in capture.SHEET.of(q.ALL) if a.sets == 'hold_ok')
+        tui = self.Asks()
+        capture._clear_fact(tui, dev, ask)
+        self.assertFalse(tui.asked[0][2])
+
+    def test_saying_no_to_a_fact_keeps_it(self):
+        real = fake.devices()[0]
+        dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
+        dev.under(fake.rig(real))
+        one = next(g for g in dev.groups(bindable=True) if g.id)
+        capture._set_fact(dev, one, 'hold_ok', True)
+        ask = next(a for a in capture.SHEET.of(q.ALL) if a.sets == 'hold_ok')
+        self.assertFalse(capture._clear_fact(self.Asks(yes=False), dev, ask))
+        self.assertEqual('measured', one.told('hold_ok'))
+
+    def test_a_fact_nobody_answered_is_not_worth_asking_about(self):
+        real = fake.devices()[0]
+        dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
+        dev.under(fake.rig(real))
+        ask = next(a for a in capture.SHEET.of(q.ALL) if a.sets == 'hold_ok')
+        tui = self.Asks(yes=True)
+        self.assertFalse(capture._clear_fact(tui, dev, ask))
+        self.assertEqual([], tui.asked)
+
+    def test_and_saying_yes_clears_it(self):
+        real = fake.devices()[0]
+        dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
+        dev.under(fake.rig(real))
+        one = next(g for g in dev.groups(bindable=True) if g.id)
+        capture._set_fact(dev, one, 'hold_ok', True)
+        ask = next(a for a in capture.SHEET.of(q.ALL) if a.sets == 'hold_ok')
+        self.assertTrue(capture._clear_fact(self.Asks(yes=True), dev, ask))
+        self.assertEqual('missing', one.told('hold_ok'))
+
+    def test_a_clearing_dialog_says_only_what_goes(self):
+        # Header, what is about to be deleted, and the keys. Anything
+        # else is read once and then read past on every later one.
+        dev = fake.devices()[0]
+        prof = self.rig(dev)
+        tui = self.Asks()
+        capture._clear_round(tui, dev, prof, prof.devices[0],
+                             self.round_one())
+        self.assertEqual([], self.aside_of(tui))
+
+    def test_and_so_does_the_one_for_a_fact(self):
+        real = fake.devices()[0]
+        dev = devicemap.Device(copy.deepcopy(real._raw), real.path)
+        dev.under(fake.rig(real))
+        one = next(g for g in dev.groups(bindable=True) if g.id)
+        capture._set_fact(dev, one, 'hold_ok', True)
+        ask = next(a for a in capture.SHEET.of(q.ALL) if a.sets == 'hold_ok')
+        tui = self.Asks()
+        capture._clear_fact(tui, dev, ask)
+        self.assertEqual([], self.aside_of(tui))
+
+
+class SavingAsksFirst(unittest.TestCase):
+    """The file is the only copy: what a control IS took real time to
+    measure, and a save is how a mistake reaches it."""
+
+    class Asks:
+        def __init__(self, yes=True):
+            self.yes, self.asked, self.shown = yes, [], []
+
+        def confirm(self, title, lines, aside=(), default=True):
+            self.asked.append((title, [t for _tone, t in lines], default))
+            return self.yes
+
+        def popup(self, title, lines, full=False):
+            self.shown.append(title)
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        real = devicemap.load_all(bare=True)[0]
+        self.path = os.path.join(self.dir, os.path.basename(real.path))
+        shutil.copy(real.path, self.path)
+        with open(self.path, 'rb') as fh:
+            self.dev = devicemap.Device(tomllib.load(fh), self.path)
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def change(self):
+        one = next(g for g in self.dev.groups(bindable=True) if g.id)
+        capture._set_fact(self.dev, one, 'hold_ok', True)
+        return one
+
+    def test_with_nothing_changed_it_says_so_and_writes_nothing(self):
+        was = open(self.path).read()
+        tui = self.Asks()
+        self.assertTrue(capture._save(tui, self.dev))
+        self.assertEqual([], tui.asked)
+        self.assertEqual(['Nothing to save'], tui.shown)
+        self.assertEqual(was, open(self.path).read())
+
+    def test_a_change_is_named_before_it_is_written(self):
+        one = self.change()
+        tui = self.Asks(yes=True)
+        self.assertTrue(capture._save(tui, self.dev))
+        _title, lines, _default = tui.asked[0]
+        self.assertTrue(any(one.label in t for t in lines), lines)
+
+    def test_saying_no_leaves_the_file_alone(self):
+        was = open(self.path).read()
+        self.change()
+        self.assertFalse(capture._save(self.Asks(yes=False), self.dev))
+        self.assertEqual(was, open(self.path).read())
+
+    def test_saying_yes_writes_it(self):
+        was = open(self.path).read()
+        self.change()
+        self.assertTrue(capture._save(self.Asks(yes=True), self.dev))
+        self.assertNotEqual(was, open(self.path).read())
+
+    def test_a_file_that_is_not_there_yet_is_all_new(self):
+        os.remove(self.path)
+        tui = self.Asks(yes=False)
+        capture._save(tui, self.dev)
+        _title, lines, _default = tui.asked[0]
+        self.assertTrue(all('new' in t or 'hardware' in t for t in lines),
+                        lines)
+
+    def test_refusing_leaves_the_device_unsaved(self):
+        # `dirty` is what asks again on the way out. Cleared on a refusal,
+        # the second chance goes with it and the work leaves with you.
+        self.change()
+        rows = []
+
+        class Says(self.Asks):
+            def confirm(self, title, lines, aside=(), default=True):
+                rows.append(title)
+                return False
+
+        self.assertFalse(capture._save(Says(), self.dev))
+        self.assertTrue(rows)

@@ -601,6 +601,55 @@ def together_rows(dev, moved):
     return out
 
 
+def save_rows(before, after):
+    """[(tone, text)] -- what writing this file would change.
+
+    Per control, because that is the unit you worked in: a diff of the
+    text would say `states = [` moved, which is true and says nothing
+    about what you did.
+
+    Empty when nothing moved, which is its own answer: a save that would
+    write the file back exactly as it is, is one worth not doing.
+    """
+    out = []
+    was, now = _by_id(before.get('group')), _by_id(after.get('group'))
+    for ctrl in sorted(set(now) - set(was)):
+        out.append(('measured', f'  {"new":<7} {_said_as(now[ctrl])}'))
+    for ctrl in sorted(set(was) - set(now)):
+        out.append(('unset', f'  {"gone":<7} {_said_as(was[ctrl])}'))
+    for ctrl in sorted(set(was) & set(now)):
+        if was[ctrl] != now[ctrl]:
+            out.append(('guessed', f'  {"changed":<7} '
+                                   f'{_said_as(now[ctrl])}'))
+    now_ax = {str(a.get('index')): a for a in after.get('axis') or []}
+    was_ax = {str(a.get('index')): a for a in before.get('axis') or []}
+    for n in sorted(set(now_ax) | set(was_ax)):
+        if now_ax.get(n) == was_ax.get(n):
+            continue
+        said = (now_ax.get(n) or was_ax.get(n) or {}).get('label') \
+            or f'axis {n}'
+        tone, what = (('measured', 'new') if n not in was_ax
+                      else ('unset', 'gone') if n not in now_ax
+                      else ('guessed', 'changed'))
+        out.append((tone, f'  {what:<7} {said}'))
+    if before.get('fingerprint') != after.get('fingerprint'):
+        out.append(('meta', '  changed what the hardware reports'))
+    return out
+
+
+def _by_id(groups):
+    """Raw groups by the name this file calls them, for comparing."""
+    out = {}
+    for n, g in enumerate(groups or []):
+        out[g.get('id') or f'{g.get("kind")}#{n}'] = g
+    return out
+
+
+def _said_as(group):
+    """What to call a raw group on a screen."""
+    return group.get('label') or group.get('kind') or '?'
+
+
 def found_rows(found):
     """[(tone, text)] -- the devices plugged in, and what is left on each.
 

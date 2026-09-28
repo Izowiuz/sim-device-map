@@ -1282,3 +1282,77 @@ class WhatADeskSaysAboutOneDevice(unittest.TestCase):
         self.prof.devices[0]['leaving_home_releases_flight'] = True
         _h, b = screens.rig_side(self.prof, self.have, 0)
         self.assertNotEqual([t for _tone, t in a], [t for _tone, t in b])
+
+
+class WhatASaveWouldChange(unittest.TestCase):
+    """Per control, because that is the unit you worked in: a diff of the
+    text would say `states = [` moved, which is true and says nothing
+    about what you did."""
+
+    def raw(self, *groups, axes=(), fingerprint=None):
+        return {'group': list(groups), 'axis': list(axes),
+                'fingerprint': fingerprint or {}}
+
+    def ctrl(self, ident, label, **kw):
+        return dict({'id': ident, 'kind': 'button', 'label': label,
+                     'states': [{'button': 1}]}, **kw)
+
+    def test_nothing_moved_is_no_rows_at_all(self):
+        one = self.raw(self.ctrl('a', 'Thumb'))
+        self.assertEqual([], screens.save_rows(one, dict(one)))
+
+    def test_a_control_that_was_not_there_says_new(self):
+        got = screens.save_rows(self.raw(),
+                                self.raw(self.ctrl('a', 'Thumb')))
+        self.assertEqual(1, len(got))
+        self.assertIn('new', got[0][1])
+        self.assertIn('Thumb', got[0][1])
+
+    def test_one_that_went_says_gone(self):
+        got = screens.save_rows(self.raw(self.ctrl('a', 'Thumb')),
+                                self.raw())
+        self.assertIn('gone', got[0][1])
+        self.assertIn('Thumb', got[0][1])
+
+    def test_and_one_that_moved_says_changed(self):
+        got = screens.save_rows(
+            self.raw(self.ctrl('a', 'Thumb')),
+            self.raw(self.ctrl('a', 'Thumb', hold_ok=True)))
+        self.assertIn('changed', got[0][1])
+
+    def test_a_control_with_no_id_is_still_told_apart(self):
+        # The uncaptured bucket has none, and two of them are not one.
+        before = self.raw({'kind': 'unknown', 'states': [{'button': 1}]})
+        after = self.raw({'kind': 'unknown', 'states': [{'button': 2}]})
+        self.assertEqual(1, len(screens.save_rows(before, after)))
+
+    def test_an_axis_that_moved_is_named(self):
+        got = screens.save_rows(
+            self.raw(axes=[{'index': 2, 'label': 'Left lever'}]),
+            self.raw(axes=[{'index': 2, 'label': 'Left lever',
+                            'moves_with': [3]}]))
+        self.assertIn('Left lever', got[0][1])
+
+    def test_what_the_hardware_reports_counts_too(self):
+        got = screens.save_rows(self.raw(fingerprint={'buttons': 51}),
+                                self.raw(fingerprint={'buttons': 52}))
+        self.assertTrue(any('hardware' in t for _tone, t in got))
+
+    def test_a_new_one_and_a_gone_one_are_both_listed(self):
+        got = screens.save_rows(self.raw(self.ctrl('a', 'Thumb')),
+                                self.raw(self.ctrl('b', 'Pinky')))
+        said = '\n'.join(t for _tone, t in got)
+        self.assertIn('Thumb', said)
+        self.assertIn('Pinky', said)
+
+    def test_an_axis_that_was_not_there_says_new(self):
+        got = screens.save_rows(
+            self.raw(), self.raw(axes=[{'index': 2, 'label': 'Left lever'}]))
+        self.assertIn('new', got[0][1])
+        self.assertIn('Left lever', got[0][1])
+
+    def test_and_one_that_went_says_gone_by_name(self):
+        got = screens.save_rows(
+            self.raw(axes=[{'index': 2, 'label': 'Left lever'}]), self.raw())
+        self.assertIn('gone', got[0][1])
+        self.assertIn('Left lever', got[0][1])

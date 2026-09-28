@@ -155,10 +155,11 @@ def control_rows(dev):
         if g.status == 'uncaptured':
             out += [_loose_row(b) for b in sorted(g.all_buttons)]
             continue
-        state = _state(g)
+        state = _state(dev, g)
         out.append(Row(TONE[state],
                        f'{MARK[state]} {_called(g)[:28]:28} '
-                       f'{_owns(g):16} {_where(g):9} {_left_said(g)}',
+                       f'{_owns(dev, g):16} {_where(g):9} '
+                       f'{_left_said(dev, g)}',
                        group=g))
     return out
 
@@ -452,7 +453,7 @@ def what_is(dev, button):
     if not g.bindable:
         return [('unset', f'js {button}'),
                 ('meta', NOT_A_CONTROL.get(g.kind, (g.kind,))[0])]
-    said = [(TONE[_state(g)], f'js {button}'),
+    said = [(TONE[_state(dev, g)], f'js {button}'),
             ('plain', _called(g))]
     way = g.direction(button)
     if way:
@@ -514,8 +515,10 @@ def _called(group):
     return f'{group.kind} on js {owned[0]}' if owned else group.kind
 
 
-def _owns(group):
+def _owns(dev, group):
     """How much of it there is: positions for a control, buttons for a pile.
+
+
 
     A row that is not a control has no positions. Calling its buttons
     positions reads as a described control with three of them, which is
@@ -547,7 +550,7 @@ def _where(group):
     return f'tier {group.tier}' if group.tier is not None else 'no reach'
 
 
-def _left_said(group):
+def _left_said(dev, group):
     """What this row is still short of, named rather than counted."""
     if not group.bindable:
         owned = group.all_buttons
@@ -561,16 +564,19 @@ def _left_said(group):
     left = _unanswered(group)
     if left:
         want.append(ui.plural(left, 'fact'))
-    return ', '.join(want) + (' to go' if want else '')
+    blind = _unswept(dev, group)
+    if blind:
+        want.append(ui.plural(blind, 'axis', 'axes'))
+    return ', '.join(want)
 
 
-def _state(group):
+def _state(dev, group):
     """One word for how far a control has got."""
     if not group.bindable:
         return 'missing'
     if not group.access or not group.label:
         return 'missing'
-    if _unanswered(group):
+    if _unanswered(group) or _unswept(dev, group):
         return 'guessed'
     return 'measured'
 
@@ -580,6 +586,20 @@ def _unanswered(group):
     if not group.bindable:
         return 0
     return sum(1 for f in FACTS if group.told(f) == 'missing')
+
+
+def _unswept(dev, group):
+    """How many of its axes nobody has measured.
+
+    A control that owns an axis is not described until the axis has been
+    swept: how far it travels and how much it wanders are facts about the
+    thing you are about to bind, and nothing else can supply them. This
+    screen called such a control finished, because it only ever asked
+    about the five ergonomic answers.
+    """
+    return sum(1 for n in group.axes
+               if (a := dev.axis(n)) is not None
+               and (a.stepped is None or a.range is None or a.noise is None))
 
 
 def trace_rows(dev, events, room=None):
@@ -775,14 +795,15 @@ def found_hints(m):
 def described(dev):
     """(controls with nothing left to answer, controls)."""
     got = [g for g in dev.groups(bindable=True)]
-    return sum(1 for g in got if _state(g) == 'measured'), len(got)
+    return sum(1 for g in got if _state(dev, g) == 'measured'), len(got)
 
 
 def device_rows(prof, devices):
     """[(tone, text, device)] -- the devices this rig has, and their state."""
     out = []
     for dev in devices:
-        left = sum(_unanswered(g) for g in dev.groups(bindable=True))
+        left = sum(_unanswered(g) + _unswept(dev, g)
+                   for g in dev.groups(bindable=True))
         blank = sum(1 for g in dev.groups(bindable=True) if not g.access)
         tone = 'measured' if not left and not blank else 'guessed'
         out.append((tone,
@@ -827,29 +848,35 @@ def rig_side(prof, devices, at):
     return dev.product, out
 
 
-#: What the desk list can do. One list, so the border and the help cannot
-#: disagree about which keys there are. The border shows the first few --
-#: it is 46 columns wide beside the panel and five keys do not fit -- and
-#: `?` shows all of them.
+#: What the desk list can do, and which of them the border has room for.
+#: One list, so the border and the help cannot disagree about which keys
+#: there are. Six do not fit in 47 columns beside the panel, so three are
+#: behind `?` -- and which three is said here rather than by a slice,
+#: which silently drops whichever key is appended last.
+#:
+#: `e` is on the border and `r`/`d` are not, because a desk that has not
+#: said which hand is on what is a desk the allocator cannot use, while
+#: renaming one is housekeeping. It was behind `?`, and the only way to
+#: set a hand went unfound.
 DESK_KEYS = (
-    ('↵', 'use', 'work at the desk under the cursor'),
-    ('n', 'new', 'start a desk with no devices on it'),
-    ('r', 'rename', 'rename the desk under the cursor'),
-    ('d', 'delete', 'delete the desk under the cursor, and its file'),
-    ('e', 'hands', 'say which hand is on which device'),
+    ('↵', 'use', 'work at the desk under the cursor', True),
+    ('n', 'new', 'start a desk with no devices on it', True),
+    ('e', 'hands', 'say which hand is on which device', True),
+    ('r', 'rename', 'rename the desk under the cursor', False),
+    ('d', 'delete', 'delete the desk under the cursor, and its file', False),
 )
 
 
 def desk_keys():
     """The key names for the border, most-needed first."""
-    return tuple(f'{k} {says}' for k, says, _what in DESK_KEYS[:3]) + (
-        'ESC back',)
+    return tuple(f'{k} {says}' for k, says, _what, sill in DESK_KEYS
+                 if sill) + ('ESC back',)
 
 
 def desk_takes():
     """Every key the desk list answers to, either case."""
-    return ('?',) + tuple(x for k, _says, _what in DESK_KEYS if k.isalpha()
-                          for x in (k, k.upper()))
+    return ('?',) + tuple(x for k, _says, _what, _sill in DESK_KEYS
+                          if k.isalpha() for x in (k, k.upper()))
 
 
 def desk_help():
@@ -858,8 +885,8 @@ def desk_help():
            ('plain', '  the desk list — where your hardware sits'),
            ('plain', ''),
            ('head', 'KEYS')]
-    wide = max(len(k) for k, _s, _w in DESK_KEYS)
-    for k, _says, what in DESK_KEYS:
+    wide = max(len(k) for k, _s, _w, _b in DESK_KEYS)
+    for k, _says, what, _sill in DESK_KEYS:
         out.append(('plain', f'  {k:<{wide}}  {what}'))
     out += [('plain', f'  {"ESC":<{wide}}  back, keeping the desk you came'
                       ' in on'),
@@ -911,12 +938,16 @@ def profile_side(profiles, at, here=None, devices=()):
             continue
         bits = [d.get('role') or '', f'{d["hand"]} hand' if d.get('hand')
                 else 'hand not said']
-        said.append(('meta', '  ' + ', '.join(b for b in bits if b)))
+        said.append(('meta' if d.get('hand') else 'unset',
+                     '  ' + ', '.join(b for b in bits if b)))
     said += [('plain', ''),
              ('meta', 'A desk says where the hardware ended up: which hand'
                       ' is on what, and what each control is within reach'
                       ' of. The same throttle on a chair rail is a'
                       ' different desk.')]
+    # Beside the two words it just printed, because this is where you
+    # read them and so where you find out they are yours to change.
+    said += [('plain', ''), ('meta', 'e says which hand is on what.')]
     if p is not here:
         said += [('plain', ''), ('meta', '↵ works at this desk.')]
     return p.name, said

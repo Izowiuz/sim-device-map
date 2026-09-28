@@ -1772,14 +1772,15 @@ class FindingTheAxisYouPicked(unittest.TestCase):
     is, so the screen says whether the thing under your hand is the one
     you picked off the list."""
 
-    def moved(self, which, wanted=None, to=30000, frm=0):
+    def moved(self, which, wanted=None, to=30000, frm=0, called=''):
         read_fd, write_fd = os.pipe()
         scr = TheRoundCollectorDriven.Feeds(
             write_fd, [(capture.JS_EVENT_AXIS, which, frm),
                        (capture.JS_EVENT_AXIS, which, to)])
         t = tui.Tui(scr, tui.Theme(False))
         try:
-            got = capture.one_axis(t, read_fd, 'Axis', ['x'], wanted=wanted)
+            got = capture.one_axis(t, read_fd, 'Axis', ['x'], wanted=wanted,
+                                   called=called)
         finally:
             os.close(read_fd)
             os.close(write_fd)
@@ -1801,13 +1802,20 @@ class FindingTheAxisYouPicked(unittest.TestCase):
 
 
     def test_the_one_you_picked_says_so(self):
-        _got, scr = self.moved(3, wanted=3)
-        self.assertTrue(any('that one' in f for f in scr.frames),
+        # Named, not pointed at: it said `that one`, and nothing else on
+        # the screen mentioned the axis you opened for `that` to mean.
+        _got, scr = self.moved(3, wanted=3, called='Side lever')
+        self.assertTrue(any('that is Side lever' in f for f in scr.frames),
                         scr.frames[-1])
 
-    def test_and_another_says_it_is_another(self):
+    def test_and_another_says_which_one_you_opened(self):
+        _got, scr = self.moved(3, wanted=5, called='Side lever')
+        self.assertTrue(any('Side lever is axis 5' in f for f in scr.frames),
+                        scr.frames[-1])
+
+    def test_and_an_unnamed_one_still_says_which(self):
         _got, scr = self.moved(3, wanted=5)
-        self.assertTrue(any('different axis' in f for f in scr.frames),
+        self.assertTrue(any('axis 5' in f for f in scr.frames),
                         scr.frames[-1])
 
     def test_with_nothing_picked_it_says_neither(self):
@@ -2072,8 +2080,8 @@ class DescribingALoneAxisNamesItsControl(unittest.TestCase):
             # wants three seconds of somebody not touching it.
             self.keys = ['', '', 'enter', 'esc']
 
-        def menu(self, *a, **kw):
-            return 0
+        def menu(self, title, items, hints=None, subtitle='', index=0, **kw):
+            return index
 
         def ask(self, *a, **kw):
             return self.name
@@ -2120,3 +2128,104 @@ class DescribingALoneAxisNamesItsControl(unittest.TestCase):
         assert one is not None
         self.assertEqual('Side lever', again.axis_label(0))
         self.assertEqual(again.axis_kind(0), one.kind)
+
+
+class WhichFlowDescribesAControl(unittest.TestCase):
+    """`↵` on the main stick's roll axis opened the control walk, which
+    starts by asking you to press every part of it -- and an axis has no
+    parts to press. The menu it then offers is `devicemap.SHAPES`, which
+    has no word for `stick-x`, so answering replaced the right kind with
+    whichever button-shape you picked."""
+
+    def dev(self):
+        return next(d for d in devicemap.load_all(bare=True)
+                    if d.kind == 'stick')
+
+    def test_an_axis_goes_to_the_axis_flow(self):
+        for g in self.dev().groups(bindable=True):
+            if g.axes and g.kind not in devicemap.SHAPES:
+                with self.subTest(ctrl=g.id):
+                    self.assertTrue(capture._is_an_axis(g))
+
+    def test_a_shape_the_menu_knows_stays_in_the_control_walk(self):
+        # A mini-stick and a dial own axes too, but they have a click to
+        # press and the menu has a word for them.
+        for g in self.dev().groups(bindable=True):
+            if g.kind in devicemap.SHAPES:
+                with self.subTest(ctrl=g.id):
+                    self.assertFalse(capture._is_an_axis(g))
+
+    def test_and_a_plain_button_never_does(self):
+        self.assertFalse(capture._is_an_axis(
+            fake.control('button', [0], label='One')))
+
+    def test_every_kind_on_file_is_offered_by_one_flow_or_the_other(self):
+        # The hole this closes: `stick-x` was accepted by the reader and
+        # offered by neither menu, so opening such a control could only
+        # make it wrong.
+        walk = {c['name'] for c in capture.SHEET.vocabulary['kind']}
+        axis = {c['name'] for c in capture.SHEET.vocabulary['axis_kind']}
+        for dev in devicemap.load_all(bare=True):
+            for g in dev.groups(bindable=True):
+                with self.subTest(dev=dev.slug, ctrl=g.id):
+                    self.assertIn(g.kind, axis if capture._is_an_axis(g)
+                                  else walk)
+
+
+class TheAxisKindMenuOpensOnWhatItIs(unittest.TestCase):
+    """It opened on the first of ten however the axis was described, so
+    RETURN quietly turned a twist into the main stick's roll. And its
+    subtitle repeated the control's name, which is in the title, wrapping
+    onto a second line and pushing two kinds off a short screen."""
+
+    class Records(DescribingALoneAxisNamesItsControl.Answers):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.menus = []
+
+        def menu(self, title, items, hints=None, subtitle='', index=0, **kw):
+            self.menus.append((title, list(items), subtitle, index))
+            return index
+
+    def run_on(self, dev, index):
+        read_fd, write_fd = os.pipe()
+        tui = self.Records(write_fd, index)
+        try:
+            capture.capture_axis(tui, dev, read_fd, wanted=index)
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        return tui.menus[0]
+
+    def dev(self):
+        real = next(d for d in devicemap.load_all(bare=True)
+                    if d.kind == 'stick')
+        return devicemap.Device(copy.deepcopy(real._raw), real.path)
+
+    def test_it_opens_on_the_kind_the_axis_already_is(self):
+        dev = self.dev()
+        for n in (0, 2):
+            with self.subTest(axis=n):
+                _title, items, _sub, at = self.run_on(self.dev(), n)
+                says = {c['name']: c['says']
+                        for c in capture.SHEET.vocabulary['axis_kind']}
+                self.assertEqual(says[dev.axis_kind(n)], items[at])
+
+    def test_it_offers_every_axis_kind(self):
+        _title, items, _sub, _at = self.run_on(self.dev(), 0)
+        self.assertEqual(len(capture.SHEET.vocabulary['axis_kind']),
+                         len(items))
+
+    def test_the_subtitle_says_what_the_title_does_not(self):
+        # It is what the hardware reports. What the control is called is
+        # in the title, and said twice it wrapped the subtitle.
+        title, _items, sub, _at = self.run_on(self.dev(), 0)
+        g = self.dev().axis_group(0)
+        assert g is not None
+        self.assertNotIn(g.label, sub)
+        self.assertIn('ABS_X', sub)
+        self.assertLessEqual(len(sub), 60)
+
+    def test_and_the_title_is_the_axis_and_nothing_jammed_after_it(self):
+        title, _items, _sub, _at = self.run_on(self.dev(), 0)
+        self.assertEqual('axis 0 — what is it?', title)

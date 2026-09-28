@@ -118,7 +118,7 @@ class HowFarAControlHasGot(unittest.TestCase):
     def test_placed_but_standing_on_its_shape(self):
         row = self.rows()[0]
         self.assertEqual('guessed', row.tone)
-        self.assertIn('5 facts to go', row.text)
+        self.assertIn('5 facts', row.text)
 
     def test_answered_for(self):
         row = self.rows(hold_ok=True, rapid_ok=True, modifier_ok=False,
@@ -712,7 +712,7 @@ class WhatARowSaysAControlHas(unittest.TestCase):
         for g in self.dev.groups(bindable=True):
             if g.axes and not g.places:
                 with self.subTest(ctrl=g.id):
-                    said = screens._owns(g)
+                    said = screens._owns(self.dev, g)
                     self.assertIn('axis' if len(g.axes) == 1 else 'axes',
                                   said)
                     self.assertNotIn('0', said)
@@ -722,21 +722,85 @@ class WhatARowSaysAControlHas(unittest.TestCase):
             if g.places:
                 with self.subTest(ctrl=g.id):
                     self.assertIn(ui.plural(len(g.places), 'position'),
-                                  screens._owns(g))
+                                  screens._owns(self.dev, g))
 
     def test_a_control_with_only_a_click_says_so(self):
         # Otherwise its row says nothing at all about what is on it.
         for g in self.dev.groups(bindable=True):
             if g.push is not None and not g.places:
                 with self.subTest(ctrl=g.id):
-                    self.assertIn('click', screens._owns(g))
+                    self.assertIn('click', screens._owns(self.dev, g))
 
     def test_a_pile_of_buttons_is_counted_in_buttons(self):
         for g in self.dev.groups():
             if not g.bindable and g.all_buttons:
                 with self.subTest(kind=g.kind):
-                    self.assertIn('button', screens._owns(g))
-                    self.assertNotIn('position', screens._owns(g))
+                    self.assertIn('button', screens._owns(self.dev, g))
+                    self.assertNotIn('position', screens._owns(self.dev, g))
+
+
+class AnUnsweptAxisIsNotFinished(unittest.TestCase):
+    """How far an axis travels and how much it wanders are measurements,
+    not opinions you supply -- and the list called a lever finished on
+    the strength of the five ergonomic answers it had, while nobody had
+    ever moved it."""
+
+    def setUp(self):
+        dev = fake.unanswered(on_a_desk=False)
+        prof = devicemap.Profile({'name': 'x', 'device': [
+            {'slug': dev.slug, 'hand': 'left',
+             'access': {g.id: [{'level': 'HOME', 'finger': 'thumb'}]
+                        for g in dev.groups(bindable=True) if g.id}}]}, '<x>')
+        self.dev = dev.under(prof)
+        self.one = next(g for g in self.dev.groups(bindable=True) if g.axes)
+        # Every control answered, so the only thing outstanding anywhere
+        # is the axis -- otherwise the device row is `guessed` for
+        # reasons that have nothing to do with sweeping.
+        for g in self.dev.groups(bindable=True):
+            for f in screens.FACTS:
+                setattr(g, f, True)
+
+    def swept(self, yes):
+        a = self.dev.axis(self.one.axes[0])
+        assert a is not None
+        a.stepped, a.range, a.noise = ((False, 65534, 2) if yes
+                                       else (None, None, None))
+
+    def test_a_control_whose_axis_nobody_moved_is_not_done(self):
+        self.swept(False)
+        self.assertEqual('guessed', screens._state(self.dev, self.one))
+        self.assertIn('1 axis', screens._left_said(self.dev, self.one))
+
+    def test_and_once_it_is_measured_it_is(self):
+        self.swept(True)
+        self.assertEqual('measured', screens._state(self.dev, self.one))
+        self.assertEqual('', screens._left_said(self.dev, self.one))
+
+    def test_half_a_measurement_is_not_one(self):
+        # A sweep with no settle leaves the noise unmeasured, and a
+        # control with an axis nobody let settle is not described.
+        a = self.dev.axis(self.one.axes[0])
+        assert a is not None
+        a.stepped, a.range, a.noise = False, 65534, None
+        self.assertEqual('guessed', screens._state(self.dev, self.one))
+
+    def test_the_device_row_counts_it_too(self):
+        self.swept(True)
+        (tone, text, _d), = screens.device_rows(None, [self.dev])
+        self.assertEqual('measured', tone)
+        self.assertIn('nothing outstanding', text)
+        self.swept(False)
+        (tone, text, _d), = screens.device_rows(None, [self.dev])
+        self.assertEqual('guessed', tone)
+        self.assertIn('to go', text)
+
+    def test_and_a_control_with_no_axes_is_unaffected(self):
+        self.swept(False)
+        plain = next(g for g in self.dev.groups(bindable=True)
+                     if not g.axes)
+        for f in screens.FACTS:
+            setattr(plain, f, True)
+        self.assertEqual('measured', screens._state(self.dev, plain))
 
 
 class TheReachRounds(unittest.TestCase):
@@ -1331,9 +1395,28 @@ class TheDeskList(unittest.TestCase):
 
     def test_every_key_is_explained_exactly_once(self):
         said = '\n'.join(t for _tone, t in screens.desk_help())
-        for k, _says, what in screens.DESK_KEYS:
+        for k, _says, what, _sill in screens.DESK_KEYS:
             with self.subTest(key=k):
                 self.assertEqual(1, said.count(what))
+
+    def test_the_key_that_sets_a_hand_is_on_the_border(self):
+        # It was behind `?`, and the only way to say which hand is on
+        # what went unfound -- with the two words it sets printed in the
+        # panel beside it the whole time.
+        self.assertIn('e hands', screens.desk_keys())
+
+    def test_the_border_says_no_more_than_it_has_room_for(self):
+        scr = fake.Screen(24, 80)
+        t = ui.Tui(scr, ui.Theme(False))
+        (_y, _x, _h, lw), _right = t.halves(24, 80)
+        self.assertLessEqual(len(ui.SEP.join(screens.desk_keys())), lw - 4)
+
+    def test_and_every_key_off_it_is_still_reachable(self):
+        takes = screens.desk_takes()
+        for k, _says, _what, sill in screens.DESK_KEYS:
+            if k.isalpha() and not sill:
+                with self.subTest(key=k):
+                    self.assertIn(k, takes)
 
 
 class WhatADeskSaysAboutOneDevice(unittest.TestCase):

@@ -225,15 +225,19 @@ class Reading:
 SETTLE = 3
 
 
-def one_axis(tui, fd, title, help_lines, wanted=None):
+def one_axis(tui, fd, title, help_lines, wanted=None, called=''):
     """Whichever axis moves furthest from where it started, measured.
 
     Returns a `Reading`, or None if it was given up on.
 
-    `wanted` is the one you picked off the list. Saying whether the thing
-    under your hand is that one is the only way to find out short of
-    moving everything and counting: an axis number tells you nothing
-    about which piece of plastic it is.
+    `wanted` is the one you opened, and `called` is what it is called.
+    Saying whether the thing under your hand is that one is the only way
+    to find out short of moving everything and counting: an axis number
+    tells you nothing about which piece of plastic it is.
+
+    Named rather than pointed at. This said `that one` and `different
+    axis`, and nothing else on the screen mentioned the axis you opened,
+    so both pointed at something that was not there.
     """
     start, moved, seen = {}, {}, {}
     while True:
@@ -242,11 +246,12 @@ def one_axis(tui, fd, title, help_lines, wanted=None):
         said = [('plain', 'move ONE axis through its full travel,'
                           ' then RETURN'), ('plain', '')]
         if best is not None:
+            mine = called or f'the one you opened (axis {wanted})'
             said.append(('measured' if wanted in (None, best) else 'meta',
                          f'axis {best}   (travel seen: {moved[best]})'
                          + ('' if wanted is None else
-                            '   that one' if best == wanted
-                            else '   different axis')))
+                            f'   that is {mine}' if best == wanted
+                            else f'   {mine} is axis {wanted}')))
             if stepped is not None:
                 said.append(('meta', 'reports only its extremes -- a hat on'
                              ' an axis' if stepped else
@@ -1300,6 +1305,16 @@ def _set_fact(dev, group, field, value):
     setattr(group, field, value)
 
 
+def _is_an_axis(group):
+    """Whether this control is one the axis flow describes.
+
+    The shapes the control walk offers are `devicemap.SHAPES`. A control
+    of any other kind -- a lever, a twist, a bare axis -- cannot be
+    described there, because the menu has no word for what it is.
+    """
+    return bool(group.axes) and group.kind not in devicemap.SHAPES
+
+
 def walk_control(tui, fd, dev, group=None, wanted=None):
     """Ask about one control, from nothing or from what it already says.
 
@@ -1607,12 +1622,16 @@ def capture_ministick(tui, dev, fd, click=None, first_axis=None,
 
 def capture_axis(tui, dev, fd, wanted=None):
     raw = dev._raw
-    head = f'{dev.product} — axis'
+    # Headed by what you opened, when you opened one: `— axis` says the
+    # same thing as the screen it came from and nothing about which.
+    opened = dev.axis_group(wanted) if wanted is not None else None
+    called = (opened.label or opened.kind) if opened else ''
+    head = f'{dev.product} — {called or "axis"}'
     drain(fd)
     got = one_axis(tui, fd, head,
                    ['Move one axis end to end so it can be told apart.',
                     'Its resting behaviour is already measured.'],
-                   wanted=wanted)
+                   wanted=wanted, called=called)
     if got is None:
         return False
     settle(tui, fd, head, got)
@@ -1621,15 +1640,22 @@ def capture_axis(tui, dev, fd, wanted=None):
         (a for a in raw.get('axis', []) if a['index'] == idx), None)
     owner: dict | None = next((g for g in raw.get('group') or []
                                if idx in (g.get('axes') or [])), None)
+    # What the hardware said about it, and nothing else: what it is
+    # called is in the title, and repeated here it wrapped the subtitle
+    # onto a second line and pushed two of the ten kinds off a short
+    # screen.
     facts = ''
     if existing:
-        facts = (f'measured: {existing.get("hid", "?")} / '
-                 f'{existing.get("evdev", "?")}, rests '
-                 f'{existing.get("rest", "?")}   |   currently: '
-                 f'{(owner or {}).get("label", "-")}')
+        facts = (f'{existing.get("hid", "?")} / {existing.get("evdev", "?")},'
+                 f' rests {existing.get("rest", "?")}')
     kinds = SHEET.vocabulary['axis_kind']
-    ki = tui.menu(f'{head} {idx} — what is it?', [k['says'] for k in kinds],
-                  [list(k.get('hint') or []) for k in kinds], subtitle=facts)
+    # On what it already is, not on the first of ten. Opened on the wrong
+    # one, RETURN quietly changed a twist into the main stick's roll.
+    now = (owner or {}).get('kind', '')
+    at = next((n for n, k in enumerate(kinds) if k['name'] == now), 0)
+    ki = tui.menu(f'axis {idx} — what is it?', [k['says'] for k in kinds],
+                  [list(k.get('hint') or []) for k in kinds],
+                  subtitle=facts, index=at)
     if ki is None:
         return False
     chosen = kinds[ki]['name']
@@ -1802,6 +1828,18 @@ def overview(tui, dev, js, rig, probe=None):
                 row = rows[got] if isinstance(got, int) else None
                 old = row.group if row is not None else None
                 if old is not None and not old.bindable:
+                    continue
+                # An axis is described by the axis flow, which is the one
+                # that knows the axis vocabulary and does the measuring.
+                # The control walk opens by asking you to press every
+                # part of it, and an axis has no parts to press; its own
+                # shape is not in the menu it then offers, so answering
+                # replaced `stick-x` with whichever button-shape you
+                # picked.
+                if old is not None and _is_an_axis(old):
+                    dirty = capture_axis(tui, dev, fd,
+                                         wanted=old.axes[0]) or dirty
+                    _reload(dev, rig)
                     continue
                 run = walk_control(tui, fd, dev, old,
                                    row.button if row is not None else None)

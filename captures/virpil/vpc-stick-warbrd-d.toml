@@ -50,6 +50,9 @@ index  = 0
 evdev  = "ABS_X"
 hid    = "X"
 rest   = "centred"
+stepped = false
+range  = 65534
+noise  = 0
 
 [[axis]]
 index  = 1

@@ -18,7 +18,7 @@ import curses
 import unittest
 
 import fake
-import tui
+from devicemap import tui
 
 
 class TheTopEdge(unittest.TestCase):

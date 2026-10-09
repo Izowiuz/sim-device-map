@@ -283,7 +283,7 @@ class OnePieceOfPlasticIsOneControl(unittest.TestCase):
         # made one piece of plastic into two controls to say it about.
         # Which axis it is lives on the shape now, as a list of what each
         # is called, and there is nowhere to say it as a kind.
-        import questions as q
+        from devicemap import questions as q
         for c in q.read().vocabulary['kind']:
             for said in c.get('axes') or []:
                 with self.subTest(kind=c['name'], axis=said):

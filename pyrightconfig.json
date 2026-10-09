@@ -1,9 +1,8 @@
 {
   "include": [
-    "capture.py",
-    "devicemap.py",
-    "probe.py",
-    "tests"
+    "devicemap",
+    "tests",
+    "device-map.py"
   ],
   "exclude": [
     "**/__pycache__"

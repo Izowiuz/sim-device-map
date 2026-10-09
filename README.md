@@ -18,7 +18,7 @@ the third is the same for every game and lived nowhere until this repo:
 | layer | scope | how it's obtained |
 |---|---|---|
 | what actions a game has | per game | DCS: `default.lua` through a Lua interpreter · War Thunder: unpack `vromfs` · Elite: bindings XML |
-| which actions matter | per game | count how many of the factory joystick profiles the game ships bind each one |
+| which actions matter | per game | written down by hand, per game: the wizard used to count how many factory profiles bound each action, and those profiles rank somebody else's hardware |
 | **what the hardware physically is** | **every game** | **this repo** |
 
 The third layer is what decides *where* a binding goes, and it cannot be
@@ -33,7 +33,7 @@ derived from the games. It also cannot be fully derived from the OS:
   `js 8,9,10,11` is one hat, that `js 12` and `js 3` are two detents of one
   trigger, or that you can reach `js 26` without letting go of the grip.
 
-So the button layer is captured once by hand (`capture.py`) and then
+So the button layer is captured once by hand (`./device-map.py`) and then
 reused forever. One free exception: a button **held down at rest** is a switch
 position rather than a momentary button, and that is detectable — see
 `rest = "closed"` below.
@@ -165,7 +165,7 @@ so fires again on the way back out -- a weapon there goes off twice per squeeze.
 `Group.bindable_buttons` leaves both out; `all_buttons` includes them, so
 coverage still adds up.
 
-`capture.py` works the stages out by watching one pull and release rather than
+The capture tool works the stages out by watching one pull and release rather than
 asking, because they give themselves away by shape: nested intervals are
 stages, two pulses in one cycle is a transient, and a button whose first event
 is an *up* was closed before you touched anything.
@@ -176,7 +176,7 @@ That last one is ambiguous and the tool stops and asks. A trigger's own rest
 contact and a **latching lever** sitting in front of it look identical in one
 trace -- closed at the start, open through the pull, closed again at the end.
 The difference is physical: a rest contact returns on its own, a latch stays
-where you put it until you push it back. So `capture.py` asks, and on "no, I
+where you put it until you push it back. So the tool asks, and on "no, I
 push it back" the button leaves the trigger and is captured as `kind = "latch"`
 on its own.
 
@@ -306,7 +306,7 @@ or `noise` is absent rather than defaulted.
 
 Rows that are not controls carry a `status` instead of a `kind`:
 
-- `uncaptured` — the pile of buttons nobody has pressed yet. `capture.py`
+- `uncaptured` — the pile of buttons nobody has pressed yet. The capture tool
   works through these.
 - `unwired` — the firmware reports them and nothing is physically behind them.
 
@@ -332,14 +332,14 @@ before.
 | identity | fingerprint | status | what it means |
 |---|---|---|---|
 | ✓ | ✓ | `exact` | nothing to do |
-| ✗ | ✓ | `reconfigured` | same hardware, new id. `capture.py` offers to keep both ids |
+| ✗ | ✓ | `reconfigured` | same hardware, new id. The tool offers to keep both ids |
 | ✓ | ✗ | `identity-drift` | **the buttons may have been renumbered** |
 | ✗ | ✗ | `unknown` | not in the map |
 
 `identity-drift` is the dangerous one and the reason the fingerprint exists.
 If the device now reports a different number of buttons, the numbers in the
 file no longer point at the same physical controls, and a wizard reading them
-would bind the wrong things with total confidence. `capture.py` says what
+would bind the wrong things with total confidence. The tool says what
 changed and offers to throw the grouping away and start over. Silently
 re-linking would be worse than not matching at all.
 
@@ -350,14 +350,17 @@ The bind wizards, which expect this repo as a **sibling directory** -- or
 
 ```
 ~/Git/
-  sim-device-map/          <- devicemap.py + captures/
-  dcs-bind-wizard/         ./dcs-bind-wizard.py, then P in the bind table
-  warthunder-bind-wizard/  ./plan.py
+  sim-device-map/          <- devicemap/ + captures/
+    devicemap/             <- the library a wizard imports, and the capture tool
+    captures/              <- what each device IS
+    profiles/              <- the desks
+  sim-bind-wizard/         ./bind <game> plan
 ```
 
-They read exactly two things: `devicemap.py` and `captures/*/*.toml`. Devices
-are matched by USB id and serial, so which of `js0`/`js1` a device landed on,
-and the order you plugged them in, do not matter.
+A wizard reads exactly two things: `import devicemap` and
+`captures/*/*.toml`. Devices are matched by USB id and serial, so which of
+`js0` or `js1` a device landed on does not matter. Neither does the order you
+plugged them in.
 
 Change the hardware, and the flow is: capture here, then re-run the wizard in
 each game. Nothing in either game's repo describes your devices any more.
@@ -365,11 +368,22 @@ each game. Nothing in either game's repo describes your devices any more.
 ## Usage
 
 ```bash
-./capture.py              # work through the unknown controls
-./capture.py --list       # what's known about each connected device
+./device-map.py            # work through the unknown controls
+./device-map.py --list     # what is known about each connected device
+./device-map.py --raw      # every event, live
 
 python3 -c 'import devicemap; print(devicemap.find_connected())'
 ```
+
+Link `device-map.py` into a directory on your PATH and the command works from
+anywhere; it finds the repo through the link.
+
+The repo is the tool and the library at once: `device-map.py` runs the capture
+walk, and `import devicemap` is what the six games read. Those are the two
+halves of one name, so the file takes the hyphen and the package keeps the
+plain spelling the games import. There is no second listing in the library:
+the tool's `--list` was always the better of the two, because it reads under a
+desk and so knows reach.
 
 It opens on the desk list: which rig this is, because the same throttle on a
 chair rail is under a different hand and within reach of different things.

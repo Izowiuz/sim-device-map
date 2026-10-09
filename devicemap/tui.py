@@ -27,6 +27,7 @@ be the one to hold the shell both of them draw on.
 """
 
 import curses
+from collections.abc import Callable
 from functools import partial
 import textwrap
 import time
@@ -439,7 +440,8 @@ class Tui:
         left = max(least, (w - 1) * 3 // 5)
         return (0, 0, h, left), (0, left, h, w - 1 - left)
 
-    def browse(self, title, lines, side, keys=(), tail='', right='',
+    def browse(self, title, lines, side, keys=(), tail='',
+               right: 'str | Callable[[], str]' = '',
                index=0, takes=(), aside='', poll=None, count=None):
         """A list on the left, what the cursor is on described on the right.
 
@@ -500,7 +502,8 @@ class Tui:
             elif k == 'esc':
                 return None, sel
 
-    def _halves(self, title, lines, side, keys, tail, right, aside, count,
+    def _halves(self, title, lines, side, keys, tail,
+                right: 'str | Callable[[], str]', aside, count,
                 sel, top):
         """Both panels, on whatever is already there."""
         h, w = self.scr.getmaxyx()

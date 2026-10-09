@@ -151,27 +151,32 @@ def check(sheet):
     seen = set()
     for a in sheet.asks:
         if a.id in seen:
-            raise ValueError(f'two questions called {a.id!r}')
+            raise ValueError(f'Two questions are called {a.id!r}.')
         seen.add(a.id)
         if a.of not in (CONTROL, DEVICE, ALL):
-            raise ValueError(f'{a.id}: asked of {a.of!r}, which is nothing')
+            raise ValueError(f'{a.id} is asked of {a.of!r}. That is '
+                             'nothing.')
         if a.only not in ONLY:
-            raise ValueError(f'{a.id}: only = {a.only!r} names no rule')
+            raise ValueError(f'{a.id} has only = {a.only!r}. No rule has '
+                             'that name.')
         if a.uses and a.uses not in sheet.vocabulary:
-            raise ValueError(f'{a.id}: uses = {a.uses!r} names no vocabulary')
+            raise ValueError(f'{a.id} has uses = {a.uses!r}. No '
+                             'vocabulary has that name.')
         if a.how not in WIDGETS:
-            raise ValueError(f'{a.id}: how = {a.how!r} is no widget;'
-                             f' one of {", ".join(WIDGETS)}')
+            raise ValueError(f'{a.id} has how = {a.how!r}. That is not a '
+                             'widget. These are: '
+                             f'{", ".join(WIDGETS)}.')
         if a.how in ('pick', 'tick') and not a.uses and a.of != ALL:
-            raise ValueError(f'{a.id}: {a.how} with nothing to pick from')
+            raise ValueError(f'{a.id} is a {a.how} with nothing to pick '
+                             'from.')
         # `sets` is the name an answer is filed under, and for a question
         # asked of every control it is the field itself -- `_set_fact`
         # writes it straight onto the group and into the file. A typo
         # there was found on the next load, by which time you had
         # answered thirty controls into a field nothing reads.
         if a.of == ALL and a.sets not in _GROUP_FIELDS:
-            raise ValueError(f'{a.id}: sets = {a.sets!r} is no field of a'
-                             ' control')
+            raise ValueError(f'{a.id} has sets = {a.sets!r}. A control '
+                             'has no such field.')
     # The names a control may carry are closed by the reader, and the
     # words for them live here. Two lists, one truth: a shape offered on
     # screen that the reader will not accept is a capture you cannot save.
@@ -180,42 +185,48 @@ def check(sheet):
     # so there is nowhere for the two to disagree.
     for table in (devicemap.LATCHING, devicemap.CLICKS):
         if set(table) - set(devicemap.SHAPES):
-            raise ValueError(f'{sorted(set(table) - set(devicemap.SHAPES))}'
-                             ' is not a shape')
+            raise ValueError(
+                f'{sorted(set(table) - set(devicemap.SHAPES))} is not a '
+                'shape.')
     # The ORDER of the levels is the tier, so this is not a subset check:
     # the two tables have to be the same list in the same order, or the
     # words on screen and the distance they stand for come apart.
     said = tuple(c['name'] for c in sheet.vocabulary.get('level', ()))
     if said != devicemap.LEVELS:
-        raise ValueError(f'level: {said} is not {devicemap.LEVELS}')
+        raise ValueError(f'The levels are {said}. The map says they are '
+                         f'{devicemap.LEVELS}.')
     # Every kind a control may be, not only the ones with buttons: the
     # walk describes an axis control too, and a menu that cannot say
     # `lever` is a control you can open and not describe.
     offered = {c['name'] for c in sheet.vocabulary.get('kind', ())}
     if offered - set(devicemap.KINDS):
-        raise ValueError(f'kind: offers {sorted(offered - set(devicemap.KINDS))},'
-                         ' which devicemap will not accept')
+        raise ValueError(
+            f'kind offers {sorted(offered - set(devicemap.KINDS))}. The map '
+            'does not accept that.')
     for c in sheet.vocabulary.get('kind', ()):
         if len(c.get('axes') or []) > len(devicemap.AXIS_ROLES):
-            raise ValueError(f'kind: {c["name"]!r} has'
-                             f' {len(c["axes"])} axes, and there are only'
-                             f' {len(devicemap.AXIS_ROLES)} ways to say'
-                             ' which is which')
+            raise ValueError(f'kind {c["name"]!r} has '
+                             f'{len(c["axes"])} axes. There are only '
+                             f'{len(devicemap.AXIS_ROLES)} ways to say '
+                             'which is which.')
     for name, entries in sheet.vocabulary.items():
         for c in entries:
             odd = sorted(set(c) - set(ENTRY_KEYS))
             if odd:
-                raise ValueError(f'{name}: {c.get("name", c.get("value"))!r}'
-                                 f' says {odd}, which nothing reads;'
-                                 f' one of {", ".join(ENTRY_KEYS)}')
+                raise ValueError(
+                    f'{name}: {c.get("name", c.get("value"))!r} says {odd}. '
+                    f'Nothing reads that. These are read: '
+                    f'{", ".join(ENTRY_KEYS)}.')
             if 'says' not in c:
-                raise ValueError(f'{name}: an entry with no words for it: {c}')
+                raise ValueError(f'{name}: this entry has no words for '
+                                 f'it: {c}')
             if ('name' in c) == ('value' in c):
-                raise ValueError(f'{name}: an entry is stored as its name or'
-                                 f' as its value, never both or neither: {c}')
+                raise ValueError(
+                    f'{name}: an entry is stored as its name or as its '
+                    f'value. It can never be both or neither: {c}')
             if 'value' in c and not isinstance(c['value'], int):
-                raise ValueError(f'{name}: value = {c["value"]!r} is not a'
-                                 ' number, so it does not sort')
+                raise ValueError(f'{name}: value = {c["value"]!r} is not '
+                                 'a number, so it does not sort.')
     return sheet
 
 

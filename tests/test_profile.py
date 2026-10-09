@@ -15,9 +15,9 @@ import os
 import unittest
 from unittest import mock
 
-import capture
+from devicemap import capture
 import devicemap
-import questions as q
+from devicemap import questions as q
 import fake
 
 
@@ -344,7 +344,7 @@ class WithMoreThanOneDeskOnFile(unittest.TestCase):
             self.assertEqual([], devicemap.find_connected(bare=True))
 
     def test_the_wizard_starts_rather_than_stopping(self):
-        import capture
+        from devicemap import capture
         opened = []
         with mock.patch.object(devicemap, 'load_profiles', self.two), \
              mock.patch.object(devicemap.glob, 'glob', lambda _p: []), \
@@ -371,7 +371,7 @@ class WhereTheDesksAreRead(unittest.TestCase):
 
     def test_by_default_it_is_this_repo(self):
         got = self.dir_for({})
-        self.assertEqual(os.path.join(devicemap.HERE, 'profiles'), got)
+        self.assertEqual(os.path.join(devicemap.ROOT, 'profiles'), got)
 
     def test_and_the_environment_can_say_otherwise(self):
         self.assertEqual('/somewhere/else',
@@ -384,7 +384,7 @@ class WhereTheDesksAreRead(unittest.TestCase):
         with mock.patch.dict(os.environ,
                              {'SIM_DEVICE_PROFILES': '/somewhere/else'},
                              clear=True):
-            self.assertEqual(os.path.join(devicemap.HERE, 'captures'),
+            self.assertEqual(os.path.join(devicemap.ROOT, 'captures'),
                              importlib.reload(devicemap).CAPTURES)
 
 

@@ -12,13 +12,13 @@ start over -- and a trail that silently stops at four boxes has lost three.
 import re
 import unittest
 
-import capture
+from devicemap import capture
 import devicemap
 import fake
-import questions as q
-import screens
-import tui
-import tui as ui
+from devicemap import questions as q
+from devicemap import screens
+from devicemap import tui
+from devicemap import tui as ui
 
 
 def run_through(**answers):

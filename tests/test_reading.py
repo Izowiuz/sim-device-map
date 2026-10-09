@@ -16,7 +16,7 @@ import tomllib
 import unittest
 from unittest import mock
 
-import capture
+from devicemap import capture
 import devicemap
 import fake
 

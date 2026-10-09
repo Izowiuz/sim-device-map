@@ -27,9 +27,9 @@ import tomllib
 from dataclasses import dataclass
 
 import devicemap
-import questions
-import screens
-import tui as ui
+from . import questions
+from . import screens
+from . import tui as ui
 
 JS_EVENT_BUTTON, JS_EVENT_AXIS, JS_EVENT_INIT = 0x01, 0x02, 0x80
 
@@ -784,9 +784,9 @@ def observe_trigger(tui, fd, title):
                     [f'Button {b} was closed before you touched the trigger,',
                      'and closed again by the end.', '',
                      'Does it come back on its own when you let go?'],
-                    ['Yes -- it is the trigger\'s own rest contact.',
-                     'No, you push it back -- it is a separate latching lever,',
-                     'and it gets captured on its own.'])
+                    ['Yes. It is the trigger\'s own rest contact.',
+                     'No, you push it back. It is a separate latching '
+                     'lever, and it is captured on its own.'])
                 if answer is None:
                     continue
                 if not answer:
@@ -846,7 +846,8 @@ def ask_one(tui, fd, dev, run, ask, head, note='', wanted=None):
     if ask.how == 'sweep':
         return sweep_axes(tui, fd, dev, run, head, aside)
 
-    raise ValueError(f'{ask.id}: no widget draws {ask.how!r}')
+    raise ValueError(f'{ask.id} asks for {ask.how!r}. No widget draws '
+                     'that.')
 
 
 def _measured(entry, got):
@@ -882,15 +883,15 @@ def sweep_axes(tui, fd, dev, run, head, aside):
                     f'{head} — no {said}?',
                     [f'This one has no {said}.', '',
                      'Record it with the axes you have given?'],
-                    ['Hardware varies: a control with fewer axes than the'
-                     ' shape usually has is not a broken capture.'],
+                    ['Hardware varies. A control with fewer axes than '
+                     'its shape usually has is not a broken capture.'],
                     default=False):
                 break
             return None
         if one.index in got:
             tui.confirm(head,
-                        [f'That is axis {one.index} again -- the one already'
-                         f' recorded for {names[got.index(one.index)]}.', '',
+                        [f'That is axis {one.index} again. It is already '
+                         f'recorded for {names[got.index(one.index)]}.', '',
                          f'Move it {said} instead.'],
                         ['Each of them has to be its own axis.'], default=True)
             return ui.BACK
@@ -952,8 +953,8 @@ def press_in_order(tui, fd, run, head, aside):
         picked.append(b)
     if sorted(picked) != sorted(seen[:len(picked)]):
         tui.confirm('Different buttons',
-                    ['That was not the same set you pressed before, so the',
-                     'order is left as it was.'], [], default=True)
+                    ['That was not the set you pressed before, so this',
+                     'leaves the order as it was.'], [], default=True)
         return list(seen)
     return picked
 
@@ -1179,9 +1180,9 @@ def _loose_is_fine(tui, dev, got):
         f'{ui.plural(len(loose), "press")} with no control',
         [', '.join(f'{k} {n}' for k, n in loose), '',
          'Nothing is written down for these.'],
-        ['Describe them on the list first -- press `n`, or RETURN on the'
-         ' row they are in -- then walk this finger again.',
-         'Saying yes keeps whatever else this round reached.'],
+        ['Describe them on the list first. Press `n`, or press RETURN on '
+         'the row they are in. Then walk this finger again.',
+         'Yes keeps whatever else this round reached.'],
         default=False))
 
 
@@ -2043,7 +2044,8 @@ def _mark_unwired(tui, dev, btns):
         return False
     if not tui.confirm('Nothing behind them',
                        [f'Mark {btns} as reported but not wired?'],
-                       ['They stop being offered as free buttons.'],
+                       ['Nothing offers them as free buttons after '
+                        'this.'],
                        default=False):
         return False
     dev._raw['group'].append(
@@ -2113,10 +2115,10 @@ def _say_where_it_sits(tui, prof, dev):
     said['leaving_home_releases_flight'] = bool(tui.confirm(
         f'{dev.product} — does letting go of it matter?',
         ['Does taking your hand off this one stop you flying?'],
-        ['True of a stick you are holding the aircraft with, and false of'
-         ' a throttle you can leave where it is.',
-         'It is why a control you have to let go of to reach is further'
-         ' away than one you only stretch for.'],
+        ['This is true of a stick that holds the aircraft. It is false '
+         'of a throttle you can leave where it is.',
+         'It is why a control you must let go of is further away than one '
+         'you only stretch for.'],
         default=said.get('leaving_home_releases_flight', False)))
     write_profile(prof)
     return True
@@ -2136,11 +2138,12 @@ def pick_desk(tui, here=None):
         if not rigs:
             if not tui.confirm('No desk on file',
                                ['Nothing says where your hardware sits.'],
-                               ['A desk says which hand is on what, and'
-                                ' what each control is within reach of.',
-                                'Without one nothing can be measured about'
-                                ' reach, and every control reads as being'
-                                ' nowhere.']):
+                               ['A desk says which hand is on what. It '
+                                'says what each control is within reach '
+                                'of.',
+                                'Without a desk, nothing can measure '
+                                'reach, and every control reads as '
+                                'nowhere.']):
                 return None
             if _new_desk(tui) is None:
                 return None
@@ -2170,8 +2173,9 @@ def pick_desk(tui, here=None):
 
 def _new_desk(tui):
     """Start a desk with nothing on it. The rig, or None if you backed out."""
-    name = tui.ask('New desk', ['What is this one called? "Biurko",'
-                                ' "Fotel", whatever tells them apart.'])
+    name = tui.ask('New desk', ['What is this one called? Give it a name '
+                                'that tells it apart, such as "Biurko" or '
+                                '"Fotel".'])
     if not name:
         return None
     path = os.path.join(devicemap.PROFILES, devicemap.slug(name) + '.toml')
@@ -2203,8 +2207,8 @@ def _delete_desk(tui, prof, here):
     if prof is here:
         said.append('This is the desk you are working at.')
     if not tui.confirm(f'Delete {prof.name}?', said,
-                       ['The file goes with it. What a control IS stays in'
-                        ' its capture; where it ended up does not.'],
+                       ['The file goes with it. What a control IS stays '
+                        'in its capture. Where it ended up does not.'],
                        default=False):
         return False
     try:
@@ -2252,8 +2256,9 @@ def tui_main(scr, rig):
                      f'   plugged in:  {m.probe.get("usb")} / '
                      f'{m.probe.get("serial")}', '',
                      'Same hardware after a reconfiguration?'],
-                    ['Saying yes keeps both ids, so either one is recognised.',
-                     'The shape is unchanged, so the grouping still holds.']):
+                    ['Yes keeps both ids, so either one is recognised.',
+                     'The shape is unchanged, so the grouping still '
+                     'holds.']):
                 dev.add_identity(m.probe)
                 write_device(dev)
                 m.status = devicemap.EXACT
@@ -2264,9 +2269,10 @@ def tui_main(scr, rig):
                     ['Same device id, but the hardware reports something else:',
                      ''] + [f'   {line}' for line in diffs] +
                     ['', 'Throw the button grouping away and start over?'],
-                    ['The numbers in the file may no longer point at the same',
-                     'physical controls. Answering no keeps it -- then check',
-                     'each hat before you trust it.'], default=False):
+                    ['The numbers in the file may no longer point at the '
+                     'same physical controls.',
+                     'No keeps it. Then check each hat before you trust '
+                     'it.'], default=False):
                 reset_grouping(dev._raw, m.probe.get('buttons', dev.n_buttons))
                 dev.__init__(dev._raw, dev.path)
 
@@ -2287,7 +2293,8 @@ def watch_raw(matches):
         fd = os.open(m.js, os.O_RDONLY | os.O_NONBLOCK)
         drain(fd)
         fds[fd] = m.device.product
-    print('working the controls prints every event; Ctrl-C to stop\n')
+    print('Work the controls, and every event prints. Press Ctrl-C to '
+          'stop.\n')
     start = time.monotonic()
     held = {}
     try:
@@ -2317,11 +2324,12 @@ def watch_raw(matches):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--list', action='store_true',
-                    help='show what is known and exit, without the TUI')
+                    help='Show what is known, then exit. This draws no '
+                         'screen.')
     ap.add_argument('--raw', action='store_true',
-                    help='print every button and axis event live, press and '
-                         'release, until Ctrl-C -- for working out what a '
-                         'control actually does')
+                    help='Print every button and axis event as it '
+                         'happens, press and release, until Ctrl-C. Use it '
+                         'to work out what a control does.')
     args = ap.parse_args()
 
     # No desk over it: whether a joystick has a capture on file is true
@@ -2331,10 +2339,10 @@ def main():
     found = [m for m in connected if m.device]
     for m in connected:
         if m.device is None:
-            print(f'{m.js}  {m.probe.get("usb") or "?"}  — not in the map; '
-                  f'add a device file')
+            print(f'{m.js}  {m.probe.get("usb") or "?"}  the map does '
+                  f'not have it. Add a device file.')
     if not found and (args.raw or args.list):
-        raise SystemExit('no mapped device connected')
+        raise SystemExit('No device in the map is plugged in.')
 
     if args.raw:
         return watch_raw(found)
@@ -2346,8 +2354,9 @@ def main():
         if rig is not None:
             found = [m for m in devicemap.find_connected(rig=rig) if m.device]
         elif devicemap.load_profiles():
-            print('# more than one desk on file, so reach is left out;'
-                  ' SIM_DEVICE_PROFILE=<name> to read under one')
+            print('# More than one desk is on file, so this leaves reach '
+                  'out.\n# Set SIM_DEVICE_PROFILE=<name> to read under '
+                  'one.')
         for m in found:
             js, dev = m.js, m.device
             if not m.ok:
@@ -2372,6 +2381,3 @@ def main():
     # question needs a screen, and the answer changes what is read.
     curses.wrapper(tui_main, devicemap.profile())
 
-
-if __name__ == '__main__':
-    main()

@@ -18,7 +18,7 @@ import tempfile
 import tomllib
 import unittest
 
-import capture
+from devicemap import capture
 import devicemap
 
 HERE = os.path.dirname(os.path.abspath(__file__))

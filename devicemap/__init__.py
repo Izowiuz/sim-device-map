@@ -31,10 +31,17 @@ import tomllib
 from dataclasses import dataclass, field
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+#: The repo, which is one level up from the code. The data is not in the
+#: package on purpose: a capture is a file you read and edit -- it is what
+#: your hardware IS, measured by hand -- and burying it a directory deeper
+#: to keep it beside the code that reads it serves the code, not you.
+ROOT = os.path.dirname(HERE)
+
 #: captures/<manufacturer>/<device>.toml -- the manufacturer is the directory,
 #: so the `slug` inside does not have to repeat it and a second brand of pedals
 #: does not land in the same pile.
-CAPTURES = os.path.join(HERE, 'captures')
+CAPTURES = os.path.join(ROOT, 'captures')
 
 #: Where the desks live. A capture belongs to this repo -- it is what the
 #: hardware IS, and it was expensive to measure -- but a desk is a fact
@@ -42,7 +49,7 @@ CAPTURES = os.path.join(HERE, 'captures')
 #: somewhere synced, has nowhere to put the second one. So: overridable,
 #: and every screen that reads desks says which directory it read.
 PROFILES = (os.environ.get('SIM_DEVICE_PROFILES')
-            or os.path.join(HERE, 'profiles'))
+            or os.path.join(ROOT, 'profiles'))
 
 #: How well a connected device lines up with its file.
 EXACT = 'exact'                 # identity and fingerprint both agree
@@ -702,9 +709,22 @@ class Device:
         thing is. Asked of the axis table, `kind='dial'` answered `one`
         where the controls said `two`, and whichever a caller happened to
         ask decided whether a trim could go on the left dial.
+
+        A kind this map has no word for is an error, not an empty list.
+        There used to be a kind per axis -- `stick-x`, `stick-y`, `twist`
+        -- and when that went, three of the wizard's six games went on
+        asking for it. Each got nothing back and dropped the axis without
+        a word, so two of them planned a layout with no aileron, elevator
+        or rudder in it and said nothing was wrong. "No control of that
+        kind on THIS desk" stays an empty list, because that is a fair
+        question; "no such kind anywhere" is a typo.
         """
         out = self._axes
         if kind:
+            if kind not in KINDS:
+                raise ValueError(
+                    f'{kind!r} is not a kind of control. These are: '
+                    + ', '.join(KINDS) + '.')
             out = [a for a in out
                    if (g := self.axis_group(a.index)) is not None
                    and g.kind == kind]
@@ -945,9 +965,10 @@ def profile(name=None):
         return have[0] if len(have) == 1 else None
     hit = next((p for p in have if p.name == want), None)
     if hit is None:
-        raise SystemExit(f'no profile called {want!r}'
-                         + ('; have ' + ', '.join(p.name for p in have)
-                            if have else '; none on file'))
+        raise SystemExit(
+            f'No desk is called {want!r}. '
+            + ('These are on file: ' + ', '.join(p.name for p in have) + '.'
+               if have else 'None is on file.'))
     return hit
 
 
@@ -1131,24 +1152,3 @@ def find_connected(rig=None, bare=False):
             continue
         out.append(Match(info, None, UNKNOWN))
     return out
-
-
-if __name__ == '__main__':
-    for m in find_connected():
-        dev, usb, serial = m.device, m.probe.get('usb'), m.probe.get('serial')
-        if dev is None:
-            print(f'{m.js}  {usb or "?"}  — not in the map')
-            continue
-        btns = dev.unknown()
-        flag = '' if m.ok else f'   [{m.status}] {m.explain()}'
-        print(f'{m.js}  {dev.product}  ({usb}/{serial}){flag}')
-        for line in dev.fingerprint_diff(m.probe) if m.status == DRIFT else []:
-            print(f'      changed  {line}')
-        print(f'    {dev.n_buttons - len(btns)}/{dev.n_buttons} buttons described, '
-              f'{len(dev.axes())}/{dev.n_axes} axes')
-        for g in dev.groups(bindable=True):
-            d = f'  [{", ".join(g.dirs or g.stages)}]' if (g.dirs or g.stages) else ''
-            p = f' +push {g.push}' if g.push is not None else ''
-            x = f' +axes {g.axes}' if g.axes else ''
-            t = f'  tier {g.tier}' if g.tier is not None else ''
-            print(f'      {g.kind:16s} {str(g.buttons):22s} {g.label}{d}{p}{x}{t}')

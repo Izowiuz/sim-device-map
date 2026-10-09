@@ -12,7 +12,7 @@ as free, and the wizard offers it for something that is already wired.
 
 import unittest
 
-import capture
+from devicemap import capture
 import devicemap
 import fake
 

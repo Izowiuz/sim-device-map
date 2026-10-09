@@ -12,8 +12,8 @@ that has something to get wrong.
 from dataclasses import dataclass
 
 import devicemap
-import questions
-import tui as ui
+from . import questions
+from . import tui as ui
 
 #: Marks against a control in the list, and the tone each one asks for.
 #: The three states are the only thing the list is really for: what is

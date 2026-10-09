@@ -36,14 +36,14 @@ how    = "collect"
 skip   = true
 says = "Press every part of ONE control, then RETURN."
 sets = "buttons"
-note = """One control at a time, and all of it: a hat is one control, so
-press all four directions and the click as well.
+note = """Take one control at a time, and all of it. A hat is one control, so
+press all four of its directions and its click as well.
 
-A switch or a lever that stays put: leave it in the position you mean,
-and press RETURN with it still there.
+A switch or a lever can stay put. Leave it in the position you mean.
+Then press RETURN with it still there.
 
-Nothing to press is an answer: a stick or a lever is an axis and no
-buttons at all. What it owns instead is asked further down."""
+Nothing to press is an answer. A stick or a lever is an axis with no
+buttons at all. A later question asks what it owns instead."""
 
 [[ask]]
 id   = "kind"
@@ -70,8 +70,8 @@ how  = "watch"
 only = "is_selector"
 says = "Start at one end, sweep to the other."
 sets = "states"
-note = """The position you start on never sends a press: its contact is
-already closed and shows itself by opening. That is what puts it first."""
+note = """The position you start on never sends a press. Its contact is already
+closed, and it shows itself when it opens. That is why it comes first."""
 
 [[ask]]
 id   = "pull"
@@ -80,8 +80,8 @@ how  = "watch"
 only = "is_trigger"
 says = "Pull it all the way and let go."
 sets = "states"
-note = """Stages that nest are cumulative: pulling through fires everything
-bound up to that stage."""
+note = """Stages that nest are cumulative. A pull through one stage fires
+everything bound up to it."""
 
 [[ask]]
 id   = "returns"
@@ -110,8 +110,8 @@ how  = "sort"
 only = "has_directions"
 says = "Press each direction in turn."
 sets = "states"
-note = """Directions are physical, from your seat: UP is away from you,
-toward the nose."""
+note = """A direction is physical, from your seat. UP is away from you, toward
+the nose."""
 
 [[ask]]
 id    = "which_axes"
@@ -120,10 +120,12 @@ how   = "sweep"
 only  = "owns_axes"
 says  = "Move each of its axes."
 sets  = "axes"
-note  = """One at a time, end to end, then let go while it settles.
+note  = """Move one axis at a time, end to end. Then let go and wait for it to
+settle.
 
-A shape that usually has three does not have to: a stick with no twist is
-still a stick, and backing out of one asks whether it is missing."""
+A shape that usually has three axes does not have to have three. A
+stick with no twist is still a stick. Back out of one, and the next
+question asks whether it is missing."""
 
 [[ask]]
 id    = "silent"
@@ -133,10 +135,10 @@ only  = "may_sit_silent"
 says  = "Is there a position that sends nothing?"
 sets  = "silent_at"
 skip  = true
-note  = """A switch can have a detent the game never hears about -- the
-centre of an ON-OFF-(ON), or a park position wired to nothing.
+note  = """A switch can have a detent that the game never hears about. The
+centre of an ON-OFF-(ON) is one. So is a park position with no wire.
 
-Nothing can measure this: a position that sends nothing looks exactly
+Nothing can measure this. A position that sends nothing looks exactly
 like a position that is not there."""
 
 [[ask]]
@@ -145,7 +147,7 @@ of   = "control"
 how  = "name"
 says = "Name it."
 sets = "label"
-note = "What you would call it looking at the device."
+note = "Give it the name you use when you look at the device."
 
 
 # ----------------------------------------------------------- the whole device
@@ -160,9 +162,10 @@ uses  = "level"
 # No count in here and none generated for the screen either. A number of
 # passes is a fact about the vocabulary above, and one written into a
 # sentence goes stale the day a finger or a grip is added.
-note  = """How far each control is from your finger.
+note  = """This measures how far each control is from your finger.
 
-One finger at a time: press everything it reaches from that grip."""
+Use one finger at a time. Press everything that finger reaches from
+that grip."""
 
 
 # ------------------------------------------------- every control, side by side
@@ -201,8 +204,8 @@ how    = "pick"
 says   = "Can you find it without looking?"
 sets   = "blind_distinct"
 uses   = "yes_somewhat_no"
-note   = """Put your hand on the device and try it: does your finger land on
-this one, or do you have to count buttons to find it?"""
+note   = """Put your hand on the device and try it. Does your finger land on this
+one? Or do you have to count buttons to find it?"""
 
 [[ask]]
 id     = "accident_risk"
@@ -225,12 +228,12 @@ or press it instead of its neighbour in a hurry?"""
 [[vocabulary.kind]]
 name = "button"
 says = "single button"
-hint = ["One position, sprung."]
+hint = ["It has one position and a spring."]
 
 [[vocabulary.kind]]
 name = "paddle"
 says = "paddle / pinky lever"
-hint = ["Sits under a finger without regripping."]
+hint = ["It sits under a finger. You do not regrip."]
 
 [[vocabulary.kind]]
 name = "hat2"
@@ -238,30 +241,30 @@ says = "two-way hat or rocker (springs back)"
 # Two positions that point somewhere, and nothing about the shape says
 # where: a rocker can be any of three pairs.
 asks_way = true
-hint = ["Two positions, sprung to a centre that sends nothing."]
+hint = ["It has two positions. A spring returns it to a centre that sends nothing."]
 
 [[vocabulary.kind]]
 name = "hat4"
 says = "four-way hat"
 dirs = ["up", "right", "down", "left"]
-hint = ["Four positions under one finger."]
+hint = ["It has four positions under one finger."]
 
 [[vocabulary.kind]]
 name = "hat8"
 says = "eight-way hat"
 dirs = ["up", "right", "down", "left"]
-hint = ["Four positions and the diagonals between them.",
+hint = ["It has four positions and the diagonals between them.",
         "A diagonal is two contacts at once, not a ninth position."]
 
 [[vocabulary.kind]]
 name = "trigger"
 says = "multi-stage trigger"
-hint = ["One squeeze, two or three detents that nest."]
+hint = ["One squeeze goes through two or three detents that nest."]
 
 [[vocabulary.kind]]
 name = "switch2"
 says = "two-position switch (stays put)"
-hint = ["Flips and STAYS, so a contact is held."]
+hint = ["It flips and it stays, so a contact stays held."]
 
 [[vocabulary.kind]]
 name = "switch3"
@@ -271,65 +274,65 @@ hint = ["Three detents. The centre may send nothing."]
 [[vocabulary.kind]]
 name = "latch"
 says = "latching lever or flap"
-hint = ["Two positions and it stays where you put it.",
+hint = ["It has two positions. It stays where you put it.",
         "The game sees the button HELD, not pressed."]
 
 [[vocabulary.kind]]
 name = "selector"
 says = "rotary selector (3+ positions)"
-hint = ["One HELD contact per position, one closed at a time."]
+hint = ["Each position holds one contact. Only one is closed at a time."]
 
 [[vocabulary.kind]]
 name = "encoder"
 says = "rotary encoder (detents)"
 dirs = ["ccw", "cw"]
-hint = ["Clicks round rather than sweeping."]
+hint = ["It clicks round. It does not sweep."]
 
 [[vocabulary.kind]]
 name = "dial"
 says = "dial / thumbwheel"
 axes = ["round"]
-hint = ["Turns smoothly and reports an axis, not detented buttons.",
-        "Often presses in as well."]
+hint = ["It turns smoothly. It reports an axis rather than detented buttons.",
+        "It often presses in as well."]
 
 [[vocabulary.kind]]
 name = "ministick"
 says = "mini-stick"
 axes = ["horizontal", "vertical"]
-hint = ["Self-centring: two axes and often a press.",
-        "Recorded as one control, so the click stays with its axes."]
+hint = ["It centres itself. It has two axes, and often a press.",
+        "This is one control, so the click stays with its axes."]
 
 [[vocabulary.kind]]
 name = "stick"
 says = "main stick"
 axes = ["left/right", "fore/aft", "twist"]
-hint = ["The one you fly with. Three axes and nothing to press.",
-        "A stick with no twist is still a stick: that axis can be skipped."]
+hint = ["This is the one you fly with. It has three axes and nothing to press.",
+        "A stick with no twist is still a stick. You can skip that axis."]
 
 [[vocabulary.kind]]
 name = "lever"
 says = "lever"
 axes = ["end to end"]
-hint = ["Stays where you leave it. Throttle, collective.",
-        "Sometimes a contact at the end of its travel."]
+hint = ["It stays where you leave it. A throttle and a collective are levers.",
+        "It sometimes has a contact at the end of its travel."]
 
 [[vocabulary.kind]]
 name = "slider"
 says = "slider"
 axes = ["end to end"]
-hint = ["Resting at minimum makes zero mean off."]
+hint = ["It rests at its minimum, so zero means off."]
 
 [[vocabulary.kind]]
 name = "pedal"
 says = "pedal"
 axes = ["travel"]
-hint = ["Rudder, or a toe brake."]
+hint = ["A rudder and a toe brake are pedals."]
 
 [[vocabulary.kind]]
 name = "wheel"
 says = "wheel"
 axes = ["left/right"]
-hint = ["A steering wheel."]
+hint = ["This is a steering wheel."]
 
 [[vocabulary.kind]]
 name = "axis"
@@ -358,7 +361,7 @@ dirs = ["fwd", "aft"]
 [[vocabulary.level]]
 name = "HOME"
 says = "in the normal grip"
-hint = ["Your normal grip. Nothing moves: no stretching, no shifting your hand."]
+hint = ["This is your normal grip. Nothing moves: you do not stretch, and you do not shift your hand."]
 
 [[vocabulary.level]]
 name = "EXTENDED"
@@ -379,7 +382,7 @@ hint = ["You let go of the grip, but your hand stays on the device."]
 name = "OFF"
 says = "with your hand off the device"
 walked = false
-hint = ["Nothing on the device reaches it: you take your hand away."]
+hint = ["Nothing on the device reaches it. You take your hand away."]
 
 # A scale, so it is stored as its number and never as its word. `value` is
 # what goes in the file and what anything ordering these compares; `says` is

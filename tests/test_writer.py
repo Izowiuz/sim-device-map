@@ -15,7 +15,7 @@ import os
 import tomllib
 import unittest
 
-import capture
+from devicemap import capture
 import devicemap
 import fake
 

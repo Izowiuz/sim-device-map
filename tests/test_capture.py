@@ -17,12 +17,12 @@ import tempfile
 import unittest
 from unittest import mock
 
-import capture
+from devicemap import capture
 import devicemap
 import fake
-import questions as q
-import screens
-import tui
+from devicemap import questions as q
+from devicemap import screens
+from devicemap import tui
 
 
 def round_trip(group):

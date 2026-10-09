@@ -16,7 +16,7 @@ import os
 import unittest
 from unittest import mock
 
-import questions as q
+from devicemap import questions as q
 
 
 def sheet():
